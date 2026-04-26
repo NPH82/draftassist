@@ -166,32 +166,34 @@ function DraftModeInner({ draftId }) {
             {loadingHintTrades ? 'Loading…' : hintTrades ? 'Hide trade details' : 'View trade options'}
           </button>
           {hintTrades && (
-            <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-              {hintTrades.context?.targetExpectedPick != null && (
+            <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {hintTrades.context && (
                 <div className="text-xs text-muted">
-                  Expected pick: ~#{hintTrades.context.targetExpectedPick} (your next pick #{hintTrades.context.myNextPickNumber || '--'})
+                  Your pick: <strong style={{ color: 'var(--text-secondary)' }}>{hintTrades.context.myNextPickLabel || `#${hintTrades.context.myNextPickNumber}`}</strong>
+                  {hintTrades.context.targetExpectedPick != null && (
+                    <> · player expected ~pick <strong style={{ color: 'var(--text-secondary)' }}>{hintTrades.context.targetExpectedPick}</strong></>
+                  )}
                 </div>
               )}
+
               {hintTrades.tradeUp?.length > 0 && (
-                <>
-                  <div className="text-xs font-semibold text-muted">Move up to secure them</div>
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--green)', marginBottom: '0.3rem' }}>↑ Move up to secure them</div>
                   {hintTrades.tradeUp.slice(0, 2).map((t, i) => (
-                    <div key={i} className="text-xs" style={{ padding: '0.3rem 0.5rem', background: 'var(--bg-card)', borderRadius: 6 }}>
-                      {t.reason}
-                    </div>
+                    <HintTradeCard key={i} suggestion={t} direction="up" />
                   ))}
-                </>
+                </div>
               )}
+
               {hintTrades.tradeDown?.length > 0 && (
-                <>
-                  <div className="text-xs font-semibold text-muted">Trade back + still land them</div>
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--yellow)', marginBottom: '0.3rem' }}>↓ Trade back + still land them</div>
                   {hintTrades.tradeDown.slice(0, 2).map((t, i) => (
-                    <div key={i} className="text-xs" style={{ padding: '0.3rem 0.5rem', background: 'var(--bg-card)', borderRadius: 6 }}>
-                      {t.reason}
-                    </div>
+                    <HintTradeCard key={i} suggestion={t} direction="down" />
                   ))}
-                </>
+                </div>
               )}
+
               {!hintTrades.tradeUp?.length && !hintTrades.tradeDown?.length && (
                 <div className="text-xs text-muted">No specific trade partners found in the draft order window.</div>
               )}
@@ -314,5 +316,86 @@ function DraftModeInner({ draftId }) {
       {/* Faller / buy-sell alert toasts */}
       <AlertContainer />
     </Layout>
+  );
+}
+
+/* ── Compact trade card shown inside the strategy hint panel ─────────────── */
+function HintTradeCard({ suggestion, direction }) {
+  const [open, setOpen] = useState(false);
+  const isUp = direction === 'up';
+  const accentColor = isUp ? 'var(--green)' : 'var(--yellow)';
+  const manager = suggestion.targetManager?.username || 'Unknown';
+  const cmp = suggestion.pickComparison;
+
+  return (
+    <div style={{ background: 'var(--bg-primary)', borderRadius: 7, border: `1px solid var(--border)`, marginBottom: '0.35rem', overflow: 'hidden' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.6rem', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
+        <div>
+          <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>{manager}</span>
+          {cmp && (
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '0.4rem' }}>
+              {cmp.ourPick?.label} → {cmp.theirPick?.label}
+            </span>
+          )}
+        </div>
+        <span style={{ fontSize: '0.68rem', color: accentColor }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div style={{ borderTop: '1px solid var(--border)', padding: '0.45rem 0.6rem' }}>
+          {/* Value bar */}
+          {cmp && (
+            <div style={{ marginBottom: '0.4rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '0.15rem' }}>
+                <span>Your {cmp.ourPick?.label} ({Math.round(cmp.ourPick?.ktcValue || 0).toLocaleString()} KTC)</span>
+                <span>Their {cmp.theirPick?.label} ({Math.round(cmp.theirPick?.ktcValue || 0).toLocaleString()} KTC)</span>
+              </div>
+              <div style={{ display: 'flex', gap: 3, height: 4, borderRadius: 3, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
+                <div style={{ width: `${((cmp.ourPick?.ktcValue || 0) / Math.max(cmp.ourPick?.ktcValue || 1, cmp.theirPick?.ktcValue || 1)) * 100}%`, background: 'var(--text-muted)', borderRadius: 3 }} />
+                <div style={{ width: `${((cmp.theirPick?.ktcValue || 0) / Math.max(cmp.ourPick?.ktcValue || 1, cmp.theirPick?.ktcValue || 1)) * 100}%`, background: accentColor, borderRadius: 3 }} />
+              </div>
+              {isUp && cmp.neededToAdd > 0 && (
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                  Gap: ~{Math.round(cmp.rawGap).toLocaleString()} KTC · add ~{Math.round(cmp.neededToAdd).toLocaleString()} KTC (12% premium)
+                  {cmp.theirPositionalNeed && <> · they need <strong style={{ color: 'var(--text-secondary)' }}>{cmp.theirPositionalNeed}</strong></>}
+                </div>
+              )}
+              {!isUp && cmp.rawSurplus > 0 && (
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                  Surplus: ~{Math.round(cmp.rawSurplus).toLocaleString()} KTC · ask back ~{Math.round(cmp.requestBack).toLocaleString()} KTC
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Package options */}
+          {(suggestion.packages || []).slice(0, 2).map((pkg, i) => (
+            <div key={i} style={{ background: 'var(--bg-secondary)', borderRadius: 5, padding: '0.35rem 0.45rem', marginBottom: '0.3rem', border: pkg.positionalFit ? `1px solid var(--green)33` : '1px solid transparent' }}>
+              {pkg.positionalFit && <div style={{ fontSize: '0.62rem', color: 'var(--green)', fontWeight: 700, marginBottom: '0.1rem' }}>✓ POSITIONAL FIT</div>}
+              <div style={{ fontSize: '0.7rem', marginBottom: '0.2rem' }}>
+                <span style={{ color: 'var(--text-muted)' }}>Give: </span>
+                {(pkg.giving || []).map((a, j) => (
+                  <span key={j} style={{ color: isUp ? 'var(--red, #ef4444)' : 'var(--text-primary)', fontWeight: 600, marginRight: '0.3rem' }}>
+                    {a.position && <span style={{ opacity: 0.65, fontWeight: 400 }}>{a.position} </span>}{a.label} <span style={{ opacity: 0.6, fontWeight: 400 }}>({Math.round(a.ktcValue || 0).toLocaleString()})</span>
+                  </span>
+                ))}
+              </div>
+              <div style={{ fontSize: '0.7rem' }}>
+                <span style={{ color: 'var(--text-muted)' }}>Get: </span>
+                {(pkg.receiving || []).map((a, j) => (
+                  <span key={j} style={{ color: isUp ? 'var(--green)' : 'var(--yellow)', fontWeight: 600, marginRight: '0.3rem' }}>
+                    {a.label} <span style={{ opacity: 0.6, fontWeight: 400 }}>({Math.round(a.ktcValue || 0).toLocaleString()})</span>
+                  </span>
+                ))}
+              </div>
+              {pkg.notes && <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem', fontStyle: 'italic' }}>{pkg.notes}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

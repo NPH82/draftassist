@@ -640,8 +640,15 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
     const myPlayerIds = myRoster?.playerIds || myRoster?.allPlayerIds || [];
     const myTradablePlayers = myPlayerIds
       .map(id => playerMap[id])
-      .filter(p => p && p.name && (p.ktcValue || 0) > 0)
-      .sort((a, b) => (b.ktcValue || 0) - (a.ktcValue || 0));
+      .filter(p => p && p.name && ((p.ktcValue || 0) > 0 || (p.fantasyProsValue || 0) > 0))
+      // Sort by best available value: prefer FP consensus, fall back to KTC-normalized
+      .sort((a, b) => {
+        const aVal = (a.fantasyProsValue || 0) > 0 ? (a.fantasyProsValue || 0)
+          : Math.round((a.ktcValue || 0) / 140);
+        const bVal = (b.fantasyProsValue || 0) > 0 ? (b.fantasyProsValue || 0)
+          : Math.round((b.ktcValue || 0) / 140);
+        return bVal - aVal;
+      });
 
     // Determine our own positional need (for trade-down returns)
     const { analyzePositionalNeeds, buildRosterComposition } = require('../services/winWindowService');
@@ -668,22 +675,21 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
         });
         targetExpectedPick = marketRank;
 
-        const targetGoesBeforeUs = marketRank < myNextPickNumber;
-        const tradeUpUntil = Math.max(1, Math.round(marketRank));
+        // Always offer trade-up options for any manager who picks before us.
+        // Also offer trade-down options when the player is expected to fall past our slot.
         const safeUntil = Math.max(myNextPickNumber + 1, Math.round(marketRank - 1));
 
         [tradeUp, tradeDown] = await Promise.all([
-          targetGoesBeforeUs
-            ? suggestTradeUp({
-                targetPlayer,
-                ourPickNumber: myNextPickNumber,
-                targetPicksAt: tradeUpUntil,
-                allRosters,
-                playerMap,
-                userId: sleeperId,
-                ourPlayers: myTradablePlayers,
-              })
-            : Promise.resolve([]),
+          suggestTradeUp({
+            targetPlayer,
+            ourPickNumber: myNextPickNumber,
+            targetPicksAt: null,
+            allRosters,
+            playerMap,
+            userId: sleeperId,
+            ourPlayers: myTradablePlayers,
+            teams: totalRosters,
+          }),
           suggestTradeDown({
             targetPlayer,
             ourPickNumber: myNextPickNumber,
@@ -691,6 +697,7 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
             allRosters,
             userId: sleeperId,
             ourPositionalNeed,
+            teams: totalRosters,
           }),
         ]);
       }

@@ -42,7 +42,7 @@ function assessTradeFairness(giving, receiving) {
  * @param {object[]} params.ourPlayers   - Players on our roster (for package building)
  * @returns {object[]} array of trade suggestions sorted by acceptance probability
  */
-async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allRosters, playerMap, userId, ourPlayers = [] }) {
+async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allRosters, playerMap, userId, ourPlayers = [], teams = 12 }) {
   const suggestions = [];
 
   for (const roster of allRosters) {
@@ -58,6 +58,7 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
       theirPickNumber: theirNextPick,
       ourPlayers,
       theirPositionalNeed: posNeed,
+      teams,
     });
 
     suggestions.push({
@@ -66,17 +67,16 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
       targetPlayer,
       packages,
       pickComparison: {
-        ourPick:    { overall: ourPickNumber,  label: formatPick(ourPickNumber),  ktcValue: ourPickValue },
-        theirPick:  { overall: theirNextPick,  label: formatPick(theirNextPick),  ktcValue: theirPickValue },
+        ourPick:    { overall: ourPickNumber,  label: formatPick(ourPickNumber, teams),  fpValue: ourPickValue,  ktcValue: pickKtcValue(ourPickNumber) },
+        theirPick:  { overall: theirNextPick,  label: formatPick(theirNextPick, teams),  fpValue: theirPickValue, ktcValue: pickKtcValue(theirNextPick) },
         rawGap,
         neededToAdd,
         theirPositionalNeed: posNeed,
       },
-      reason: `Move up from ${formatPick(ourPickNumber)} to ${formatPick(theirNextPick)} to secure ${targetPlayer.name}. Need to add ~${Math.round(neededToAdd).toLocaleString()} KTC.`,
+      reason: `Move up from ${formatPick(ourPickNumber, teams)} to ${formatPick(theirNextPick, teams)} to secure ${targetPlayer.name}. Gap: ${rawGap} FP pts — need to add ~${neededToAdd.toFixed(1)} FP pts.`,
     });
   }
 
-  // Sort: fewest packages-needed (smallest gap) first
   return suggestions.sort((a, b) => a.pickComparison.rawGap - b.pickComparison.rawGap);
 }
 
@@ -85,7 +85,7 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
  * last safe pick for the target player.  Trading back lets us drop a few spots,
  * still land the target, and keep extra capital.
  */
-async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPick, allRosters, userId, ourPositionalNeed = 'WR' }) {
+async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPick, allRosters, userId, ourPositionalNeed = 'WR', teams = 12 }) {
   const suggestions = [];
 
   for (const roster of allRosters) {
@@ -100,6 +100,7 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
       ourPickNumber,
       theirPickNumber: theirNextPick,
       ourPositionalNeed,
+      teams,
     });
 
     suggestions.push({
@@ -108,8 +109,8 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
       targetPlayer,
       packages,
       pickComparison: {
-        ourPick:   { overall: ourPickNumber,  label: formatPick(ourPickNumber),  ktcValue: ourPickValue },
-        theirPick: { overall: theirNextPick,  label: formatPick(theirNextPick),  ktcValue: theirPickValue },
+        ourPick:   { overall: ourPickNumber,  label: formatPick(ourPickNumber, teams),  fpValue: ourPickValue,  ktcValue: pickKtcValue(ourPickNumber) },
+        theirPick: { overall: theirNextPick,  label: formatPick(theirNextPick, teams),  fpValue: theirPickValue, ktcValue: pickKtcValue(theirNextPick) },
         rawSurplus,
         requestBack,
       },
@@ -119,7 +120,7 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
       capitalGained:      rawSurplus,
       targetExpectedPick: Math.round(targetMarketPick),
       safeZone:           theirNextPick < targetMarketPick,
-      reason: `Drop ${picksBack} spot${picksBack !== 1 ? 's' : ''} to ${formatPick(theirNextPick)} — ${targetPlayer.name} expected ~${Math.round(targetMarketPick)}, gain back ~${Math.round(requestBack).toLocaleString()} KTC.`,
+      reason: `Drop ${picksBack} spot${picksBack !== 1 ? 's' : ''} to ${formatPick(theirNextPick, teams)} — ${targetPlayer.name} expected ~pick ${Math.round(targetMarketPick)}, gain back ~${requestBack.toFixed(1)} FP pts.`,
     });
   }
 
@@ -138,6 +139,7 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
         ourPickNumber,
         theirPickNumber: theirNextPick,
         ourPositionalNeed,
+        teams,
       });
 
       suggestions.push({
@@ -146,8 +148,8 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
         targetPlayer,
         packages,
         pickComparison: {
-          ourPick:   { overall: ourPickNumber,  label: formatPick(ourPickNumber),  ktcValue: ourPickValue },
-          theirPick: { overall: theirNextPick,  label: formatPick(theirNextPick),  ktcValue: theirPickValue },
+          ourPick:   { overall: ourPickNumber,  label: formatPick(ourPickNumber, teams),  fpValue: ourPickValue,  ktcValue: pickKtcValue(ourPickNumber) },
+          theirPick: { overall: theirNextPick,  label: formatPick(theirNextPick, teams),  fpValue: theirPickValue, ktcValue: pickKtcValue(theirNextPick) },
           rawSurplus,
           requestBack,
         },
@@ -158,7 +160,7 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
         targetExpectedPick: Math.round(targetMarketPick),
         safeZone:           false,
         exploratory:        true,
-        reason: `Exploratory: drop to ${formatPick(theirNextPick)} — ${targetPlayer.name} may still fall (~${Math.round(targetMarketPick)}), carries more risk.`,
+        reason: `Exploratory: drop to ${formatPick(theirNextPick, teams)} — ${targetPlayer.name} may still fall (~pick ${Math.round(targetMarketPick)}), carries more risk.`,
       });
     }
   }
@@ -168,191 +170,243 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Granular pick value curve (KTC-calibrated for a 12-team rookie draft)
-function estimatePickValue(overallPick) {
-  // Per-pick values for picks 1-24
+/**
+ * FantasyPros-calibrated pick value curve.
+ * Anchored to the April 2026 FP Dynasty Trade Value Chart:
+ *   1.01 = 68,  1.03 = 58  (user-confirmed)
+ * All packages use this scale so player FP values (e.g. Braelon Allen = 21)
+ * are directly comparable.
+ */
+function fpPickValue(overallPick) {
   const perPick = [
-    9500, 8800, 8000, 7200, 6500, 5900,  // 1-6
-    5400, 4900, 4500, 4100, 3800, 3500,  // 7-12
-    3200, 3000, 2800, 2600, 2400, 2200,  // 13-18
-    2000, 1850, 1700, 1600, 1500, 1400,  // 19-24
+    68, 63, 58, 54, 50, 46,  // 1.01 – 1.06
+    42, 39, 36, 33, 30, 28,  // 1.07 – 1.12
+    25, 23, 21, 19, 17, 16,  // 2.01 – 2.06
+    14, 13, 12, 11, 10,  9,  // 2.07 – 2.12
   ];
   if (overallPick >= 1 && overallPick <= perPick.length) return perPick[overallPick - 1];
-  if (overallPick <= 36) return 1100;
-  if (overallPick <= 48) return 800;
-  if (overallPick <= 72) return 550;
-  return 300;
+  if (overallPick <= 36) return 7;
+  if (overallPick <= 48) return 5;
+  if (overallPick <= 72) return 3;
+  return 2;
 }
 
-// Suggest a future draft pick asset whose value approximates targetValue
-function suggestFuturePickForValue(targetValue) {
-  if (targetValue >= 7000) return { label: '2027 1st (Early)', ktcValue: 7200 };
-  if (targetValue >= 5500) return { label: '2027 1st (Mid)', ktcValue: 5900 };
-  if (targetValue >= 4000) return { label: '2027 1st (Late)', ktcValue: 4400 };
-  if (targetValue >= 2500) return { label: '2027 2nd (Early)', ktcValue: 2700 };
-  if (targetValue >= 1800) return { label: '2027 2nd (Mid)', ktcValue: 2000 };
-  if (targetValue >= 1200) return { label: '2027 2nd (Late)', ktcValue: 1400 };
-  if (targetValue >= 800)  return { label: '2027 3rd Round', ktcValue: 900 };
-  if (targetValue >= 400)  return { label: '2027 4th Round', ktcValue: 500 };
-  return null;
+// Keep KTC-scale alias for any callers that still reference it (scoring engine, availability predictor)
+function estimatePickValue(overallPick) {
+  // Normalize to KTC scale: FP ÷ 68 × 9500
+  return Math.round(fpPickValue(overallPick) / 68 * 9500);
+}
+
+// Conversion constants between scales (anchored: 1.01 = 68 FP = 9500 KTC)
+const KTC_TO_FP = 68 / 9500;  // multiply KTC to get FP scale
+const FP_TO_KTC = 9500 / 68;  // multiply FP to get KTC scale
+
+/**
+ * Returns a composite trade value object for a player using both FP and KTC data.
+ * { fpValue, ktcValue, consensus } — all on their native scales.
+ * consensus is FP-scale; used for package matching logic.
+ *
+ * When both sources are present, consensus = weighted average (FP 55%, KTC→FP 45%).
+ * When only one is present, that source is used directly.
+ */
+function playerTradeValues(player) {
+  if (!player) return { fpValue: 0, ktcValue: 0, consensus: 0 };
+  const fp  = Number(player.fantasyProsValue || 0);
+  const ktc = Number(player.ktcValue || 0);
+  const ktcAsFp = ktc > 0 ? Math.max(1, Math.round(ktc * KTC_TO_FP)) : 0;
+
+  let consensus = 0;
+  if (fp > 0 && ktcAsFp > 0) {
+    consensus = Math.round(fp * 0.55 + ktcAsFp * 0.45);
+  } else if (fp > 0) {
+    consensus = fp;
+  } else if (ktcAsFp > 0) {
+    consensus = ktcAsFp;
+  }
+
+  return {
+    fpValue:  fp,
+    ktcValue: ktc,
+    fpFromKtc: ktcAsFp,
+    consensus,
+  };
+}
+
+// Convenience: just the consensus FP-scale value (used for sorting/thresholds)
+function playerFpValue(player) {
+  return playerTradeValues(player).consensus;
+}
+
+// Convenience: pick value also expressed in KTC scale for display
+function pickKtcValue(overallPick) {
+  return Math.round(fpPickValue(overallPick) * FP_TO_KTC);
 }
 
 /**
- * Build 2-3 concrete package options to trade UP from ourPickNumber to theirPickNumber.
- * Applies a 12% overpay premium (moving up costs extra).
- *
- * @param {number} ourPickNumber   - Our current pick slot (e.g. 3)
- * @param {number} theirPickNumber - Their pick slot we want (e.g. 1)
- * @param {object[]} ourPlayers    - Tradeable players on our roster [{name, position, ktcValue}]
- * @param {string} theirPositionalNeed - Position the target manager most needs
- * @returns {{ packages, ourPickValue, theirPickValue, rawGap, neededToAdd }}
+ * Pick the best future pick asset to bridge a gap of `targetFpValue` FP points.
+ * Returns { label, fpValue }.
  */
-function buildTradeUpPackages({ ourPickNumber, theirPickNumber, ourPlayers = [], theirPositionalNeed }) {
+function futurePickForGap(targetFpValue) {
+  if (targetFpValue >= 55) return { label: '2027 1st (Top-3)', fpValue: 58 };
+  if (targetFpValue >= 42) return { label: '2027 1st (Early)', fpValue: 46 };
+  if (targetFpValue >= 28) return { label: '2027 1st (Mid)',   fpValue: 33 };
+  if (targetFpValue >= 20) return { label: '2027 1st (Late)',  fpValue: 23 };
+  if (targetFpValue >= 14) return { label: '2027 2nd (Early)', fpValue: 16 };
+  if (targetFpValue >= 10) return { label: '2027 2nd (Mid)',   fpValue: 12 };
+  if (targetFpValue >=  7) return { label: '2027 2nd (Late)',  fpValue:  9 };
+  if (targetFpValue >=  4) return { label: '2027 3rd Round',   fpValue:  5 };
+  return                          { label: '2027 4th Round',   fpValue:  3 };
+}
+
+/**
+ * Build concrete package options to trade UP from ourPickNumber → theirPickNumber.
+ *
+ * Strategy:
+ *  - Applies a 12% overpay premium (moving up costs slightly more than fair value)
+ *  - Max 2 assets given per package (pick + 1 player or future pick)
+ *  - Up to 3 packages offered: positional-fit player, best-value player, future pick
+ *  - Player candidates sorted: positional need first, closest value second
+ *
+ * All values are in FP scale (e.g. 1.01 = 68, Braelon Allen ≈ 21).
+ */
+function buildTradeUpPackages({ ourPickNumber, theirPickNumber, ourPlayers = [], theirPositionalNeed, teams = 12 }) {
   const OVERPAY = 1.12;
-  const ourValue   = estimatePickValue(ourPickNumber);
-  const theirValue = estimatePickValue(theirPickNumber);
-  const rawGap     = theirValue - ourValue; // positive = their pick is more valuable
+  const ourFp   = fpPickValue(ourPickNumber);
+  const theirFp = fpPickValue(theirPickNumber);
+  const rawGap      = theirFp - ourFp;        // positive = their pick is more valuable
   const neededToAdd = Math.max(0, rawGap * OVERPAY);
 
   const packages = [];
 
-  if (neededToAdd < 150) {
-    // Near-even swap — mention small premium just to incentivise acceptance
+  // Near-even: gap <= 2 FP pts — straight swap with a small goodwill bump
+  if (neededToAdd <= 2) {
     packages.push({
       label: 'Near-Even Swap',
-      giving: [{ type: 'pick', label: formatPick(ourPickNumber), ktcValue: ourValue }],
-      receiving: [{ type: 'pick', label: formatPick(theirPickNumber), ktcValue: theirValue }],
-      giveTotal: ourValue,
-      receiveTotal: theirValue,
+      giving:    [{ type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) }],
+      receiving: [{ type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) }],
+      giveTotal:   ourFp,
+      receiveTotal: theirFp,
+      rawGap,
       neededToAdd: 0,
-      valueGap: rawGap,
       positionalFit: false,
-      notes: 'Essentially a straight swap — small gap is acceptable.',
+      notes: 'Essentially a straight swap — minimal gap.',
     });
-    return { packages, ourPickValue: ourValue, theirPickValue: theirValue, rawGap, neededToAdd };
+    return { packages, ourPickValue: ourFp, theirPickValue: theirFp, rawGap, neededToAdd };
   }
 
+  // Build list of tradeable players sorted: positional match first, then by FP value descending
   const tradeable = ourPlayers
-    .filter(p => (p.ktcValue || 0) > 0)
-    .sort((a, b) => (b.ktcValue || 0) - (a.ktcValue || 0));
-
-  // Option A: Player that matches their positional need
-  const posMatches = tradeable.filter(p => p.position === theirPositionalNeed);
-  const bestPosMatch = posMatches.find(p => (p.ktcValue || 0) >= neededToAdd * 0.8) || posMatches[0];
-  if (bestPosMatch) {
-    const giveTotal = ourValue + (bestPosMatch.ktcValue || 0);
-    packages.push({
-      label: `${formatPick(ourPickNumber)} + ${bestPosMatch.name}`,
-      giving: [
-        { type: 'pick',   label: formatPick(ourPickNumber), ktcValue: ourValue },
-        { type: 'player', label: bestPosMatch.name, position: bestPosMatch.position, ktcValue: bestPosMatch.ktcValue || 0 },
-      ],
-      receiving: [{ type: 'pick', label: formatPick(theirPickNumber), ktcValue: theirValue }],
-      giveTotal,
-      receiveTotal: theirValue,
-      neededToAdd,
-      valueGap: rawGap,
-      positionalFit: true,
-      notes: `${bestPosMatch.name} fills their ${theirPositionalNeed} need — highest acceptance chance.`,
+    .map(p => ({ ...p, fpVal: playerFpValue(p) }))
+    .filter(p => p.fpVal > 0)
+    .sort((a, b) => {
+      const aPosMatch = a.position === theirPositionalNeed ? 1 : 0;
+      const bPosMatch = b.position === theirPositionalNeed ? 1 : 0;
+      if (bPosMatch !== aPosMatch) return bPosMatch - aPosMatch;
+      // prefer player whose value is closest to neededToAdd from above (not grossly over)
+      const aDiff = Math.abs(a.fpVal - neededToAdd);
+      const bDiff = Math.abs(b.fpVal - neededToAdd);
+      return aDiff - bDiff;
     });
+
+  const seenPlayers = new Set();
+
+  // Option A: Player that fills their positional need (or closest available)
+  const posMatch = tradeable.find(p => p.position === theirPositionalNeed && p.fpVal >= neededToAdd * 0.6);
+  const bestAny  = tradeable[0]; // overall best fit to gap
+
+  for (const candidate of [posMatch, bestAny].filter(Boolean)) {
+    if (seenPlayers.has(candidate.name)) continue;
+    seenPlayers.add(candidate.name);
+    const tv = playerTradeValues(candidate);
+    const giveTotal = ourFp + candidate.fpVal;
+    const isPosFit  = candidate.position === theirPositionalNeed;
+    packages.push({
+      label: `${formatPick(ourPickNumber, teams)} + ${candidate.name}`,
+      giving: [
+        { type: 'pick',   label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) },
+        { type: 'player', label: candidate.name, position: candidate.position,
+          fpValue: tv.fpValue, ktcValue: tv.ktcValue, fpFromKtc: tv.fpFromKtc, consensus: tv.consensus },
+      ],
+      receiving: [{ type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) }],
+      giveTotal,
+      receiveTotal: theirFp,
+      rawGap,
+      neededToAdd,
+      positionalFit: isPosFit,
+      notes: isPosFit
+        ? `${candidate.name} fills their ${theirPositionalNeed} need — highest acceptance chance.`
+        : `Bridges the ~${rawGap} FP pt gap. Not their biggest need but adds solid value.`,
+    });
+    if (packages.length >= 2) break;
   }
 
-  // Option B: Best available player regardless of position (closest value)
-  const bestValue = tradeable.find(p => (p.ktcValue || 0) >= neededToAdd * 0.75 && p !== bestPosMatch);
-  if (bestValue) {
-    const giveTotal = ourValue + (bestValue.ktcValue || 0);
-    packages.push({
-      label: `${formatPick(ourPickNumber)} + ${bestValue.name}`,
-      giving: [
-        { type: 'pick',   label: formatPick(ourPickNumber), ktcValue: ourValue },
-        { type: 'player', label: bestValue.name, position: bestValue.position, ktcValue: bestValue.ktcValue || 0 },
-      ],
-      receiving: [{ type: 'pick', label: formatPick(theirPickNumber), ktcValue: theirValue }],
-      giveTotal,
-      receiveTotal: theirValue,
-      neededToAdd,
-      valueGap: rawGap,
-      positionalFit: bestValue.position === theirPositionalNeed,
-      notes: `Bridges the value gap. ${bestValue.position === theirPositionalNeed ? 'Fits their positional need.' : 'Consider if they prefer this position.'}`,
-    });
-  }
+  // Option C (always): Future pick — keeps roster intact
+  const futurePick = futurePickForGap(neededToAdd);
+  packages.push({
+    label: `${formatPick(ourPickNumber, teams)} + ${futurePick.label}`,
+    giving: [
+      { type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) },
+      { type: 'pick', label: futurePick.label, fpValue: futurePick.fpValue, ktcValue: Math.round(futurePick.fpValue * FP_TO_KTC) },
+    ],
+    receiving: [{ type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) }],
+    giveTotal:    ourFp + futurePick.fpValue,
+    receiveTotal: theirFp,
+    rawGap,
+    neededToAdd,
+    positionalFit: false,
+    notes: 'Capital-only offer — no roster disruption.',
+  });
 
-  // Option C: Add a future draft pick to bridge the gap (capital-only)
-  const futurePick = suggestFuturePickForValue(neededToAdd);
-  if (futurePick) {
-    const giveTotal = ourValue + futurePick.ktcValue;
-    packages.push({
-      label: `${formatPick(ourPickNumber)} + ${futurePick.label}`,
-      giving: [
-        { type: 'pick', label: formatPick(ourPickNumber), ktcValue: ourValue },
-        { type: 'pick', label: futurePick.label, ktcValue: futurePick.ktcValue },
-      ],
-      receiving: [{ type: 'pick', label: formatPick(theirPickNumber), ktcValue: theirValue }],
-      giveTotal,
-      receiveTotal: theirValue,
-      neededToAdd,
-      valueGap: rawGap,
-      positionalFit: false,
-      notes: 'Capital-only offer — keeps your roster intact.',
-    });
-  }
-
-  return { packages, ourPickValue: ourValue, theirPickValue: theirValue, rawGap, neededToAdd };
+  return { packages, ourPickValue: ourFp, theirPickValue: theirFp, rawGap, neededToAdd };
 }
 
 /**
- * Build package options to trade DOWN from ourPickNumber to theirPickNumber.
- * Applies an 8% discount (we request slightly less than full fair value).
- *
- * @param {number} ourPickNumber   - Our current pick slot
- * @param {number} theirPickNumber - Their later pick we'd swap into
- * @param {string} ourPositionalNeed - Position we most need back
- * @returns {{ packages, ourPickValue, theirPickValue, rawSurplus, requestBack }}
+ * Build package options to trade DOWN from ourPickNumber → theirPickNumber.
+ * We request back ~88% of the surplus (sweetens the deal for the other manager).
+ * Max complexity: their pick + 1 future pick returned to us.
  */
-function buildTradeDownPackages({ ourPickNumber, theirPickNumber, ourPositionalNeed }) {
-  const UNDERPAY = 0.88; // we accept ~88% of fair value — sweetens the deal
-  const ourValue    = estimatePickValue(ourPickNumber);
-  const theirValue  = estimatePickValue(theirPickNumber);
-  const rawSurplus  = ourValue - theirValue;
+function buildTradeDownPackages({ ourPickNumber, theirPickNumber, ourPositionalNeed, teams = 12 }) {
+  const UNDERPAY = 0.88;
+  const ourFp    = fpPickValue(ourPickNumber);
+  const theirFp  = fpPickValue(theirPickNumber);
+  const rawSurplus  = ourFp - theirFp;
   const requestBack = Math.max(0, rawSurplus * UNDERPAY);
 
   const packages = [];
 
-  // Option A: Swap + future pick back
-  const returnPick = suggestFuturePickForValue(requestBack);
-  if (returnPick) {
-    packages.push({
-      label: `${formatPick(ourPickNumber)} → ${formatPick(theirPickNumber)} + ${returnPick.label}`,
-      giving:    [{ type: 'pick', label: formatPick(ourPickNumber), ktcValue: ourValue }],
-      receiving: [
-        { type: 'pick', label: formatPick(theirPickNumber), ktcValue: theirValue },
-        { type: 'pick', label: returnPick.label, ktcValue: returnPick.ktcValue },
-      ],
-      giveTotal:    ourValue,
-      receiveTotal: theirValue + returnPick.ktcValue,
-      rawSurplus,
-      requestBack,
-      capitalGained: returnPick.ktcValue,
-      notes: `Capture ~${Math.round(returnPick.ktcValue).toLocaleString()} KTC in extra capital while still landing your target.`,
-    });
-  }
+  // Option A: Swap + a future pick returned to us
+  const returnPick = futurePickForGap(requestBack);
+  packages.push({
+    label: `${formatPick(ourPickNumber, teams)} → ${formatPick(theirPickNumber, teams)} + ${returnPick.label}`,
+    giving:    [{ type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) }],
+    receiving: [
+      { type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) },
+      { type: 'pick', label: returnPick.label, fpValue: returnPick.fpValue, ktcValue: Math.round(returnPick.fpValue * FP_TO_KTC) },
+    ],
+    giveTotal:    ourFp,
+    receiveTotal: theirFp + returnPick.fpValue,
+    rawSurplus,
+    requestBack,
+    capitalGained: returnPick.fpValue,
+    notes: `Gain a ${returnPick.label} (~${returnPick.fpValue} FP / ~${Math.round(returnPick.fpValue * FP_TO_KTC).toLocaleString()} KTC) while still landing your target.`,
+  });
 
-  // Option B: Swap only (near-even) — mention slight discount
-  if (rawSurplus < 600) {
+  // Option B: Near-even straight swap (only when surplus is small)
+  if (rawSurplus <= 4) {
     packages.push({
-      label: `${formatPick(ourPickNumber)} → ${formatPick(theirPickNumber)} (swap)`,
-      giving:    [{ type: 'pick', label: formatPick(ourPickNumber), ktcValue: ourValue }],
-      receiving: [{ type: 'pick', label: formatPick(theirPickNumber), ktcValue: theirValue }],
-      giveTotal:    ourValue,
-      receiveTotal: theirValue,
+      label: `${formatPick(ourPickNumber, teams)} → ${formatPick(theirPickNumber, teams)} (swap)`,
+      giving:    [{ type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) }],
+      receiving: [{ type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) }],
+      giveTotal:    ourFp,
+      receiveTotal: theirFp,
       rawSurplus,
       requestBack: 0,
       capitalGained: 0,
-      notes: 'Low-cost drop. Slight value left on the table but keeps negotiations simple.',
+      notes: 'Near-even drop — simplest to close.',
     });
   }
 
-  return { packages, ourPickValue: ourValue, theirPickValue: theirValue, rawSurplus, requestBack };
+  return { packages, ourPickValue: ourFp, theirPickValue: theirFp, rawSurplus, requestBack };
 }
 
 // Format an overall pick number as "Round.Pick" (e.g. 3 → "1.03", 15 → "2.03")

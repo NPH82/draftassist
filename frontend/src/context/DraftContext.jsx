@@ -20,8 +20,8 @@ export function DraftProvider({ draftId, children }) {
       const data = await getDraftState(draftId, mode);
       setDraftState(data);
 
-      // Detect new picks -- remove them from queue
-      if (data.available && queue.length > 0) {
+      // Detect new picks -- remove them from queue using functional update (avoids stale queue closure)
+      if (data.available) {
         const availableIds = new Set(data.available.map(p => p.sleeperId || p._id?.toString()));
         setQueue(q => q.filter(id => availableIds.has(id)));
       }
@@ -42,15 +42,15 @@ export function DraftProvider({ draftId, children }) {
     } finally {
       setLoading(false);
     }
-  }, [draftId, mode, queue]);
+  }, [draftId, mode]); // queue removed — setQueue functional update avoids stale closure
 
-  // Initial load + poll
+  // Initial load + poll — re-runs whenever fetchState changes (i.e. draftId or mode changes)
   useEffect(() => {
     if (!draftId) return;
     fetchState();
     pollRef.current = setInterval(fetchState, POLL_INTERVAL_MS);
     return () => clearInterval(pollRef.current);
-  }, [draftId, mode]);
+  }, [fetchState]);
 
   // Dismiss alert after 8 seconds
   useEffect(() => {

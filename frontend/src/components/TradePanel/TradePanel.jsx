@@ -1,7 +1,17 @@
 import { useState } from 'react';
 import { getDraftTrades } from '../../services/api';
 
-const fmt = (n) => Math.round(n || 0).toLocaleString();
+const fmt    = (n) => Math.round(n || 0).toLocaleString();
+const fmtKtc = (n) => n > 0 ? Math.round(n).toLocaleString() : null;
+// Returns a short display string showing available value sources
+function assetValueLabel(asset) {
+  const fp  = asset.fpValue  > 0 ? `${asset.fpValue} FP`  : null;
+  // For players, prefer raw ktcValue; for picks use ktcValue attached to asset
+  const ktcRaw = asset.ktcValue > 0 ? asset.ktcValue : null;
+  const ktc = ktcRaw ? `${Math.round(ktcRaw).toLocaleString()} KTC` : null;
+  if (fp && ktc) return `${fp} / ${ktc}`;
+  return fp || ktc || '';
+}
 
 /**
  * Trade panel -- shown when user taps "View trade options" on a player card.
@@ -117,13 +127,13 @@ function TradeUpCard({ suggestion, myPickLabel }) {
 
         {pickComparison?.neededToAdd > 0 && (
           <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-            Gap to bridge:{' '}
+            Gap:{' '}
             <strong style={{ color: 'var(--yellow)' }}>
-              ~{fmt(pickComparison.rawGap)} KTC
+              {pickComparison.rawGap.toFixed(1)} FP
             </strong>
-            {' '}· with 12% move-up premium:{' '}
+            {' '}· need to add (12% premium):{' '}
             <strong style={{ color: 'var(--orange, #f59e0b)' }}>
-              ~{fmt(pickComparison.neededToAdd)} KTC to add
+              ~{pickComparison.neededToAdd.toFixed(1)} FP
             </strong>
           </div>
         )}
@@ -181,13 +191,13 @@ function TradeDownCard({ suggestion, myPickLabel }) {
 
         {pickComparison?.rawSurplus > 0 && (
           <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-            Your pick surplus:{' '}
+            Your surplus:{' '}
             <strong style={{ color: 'var(--green)' }}>
-              ~{fmt(pickComparison.rawSurplus)} KTC
+              {pickComparison.rawSurplus.toFixed(1)} FP
             </strong>
-            {' '}· requesting back at 88% ={' '}
+            {' '}· asking back (88%):{' '}
             <strong style={{ color: 'var(--green)' }}>
-              ~{fmt(pickComparison.requestBack)} KTC
+              ~{pickComparison.requestBack.toFixed(1)} FP
             </strong>
           </div>
         )}
@@ -209,18 +219,21 @@ function TradeDownCard({ suggestion, myPickLabel }) {
 
 /* ── Pick value comparison bar ────────────────────────────────────────────── */
 function PickValueBar({ ourPick, theirPick, direction }) {
-  const maxVal = Math.max(ourPick.ktcValue, theirPick.ktcValue, 1);
-  const ourPct  = (ourPick.ktcValue  / maxVal) * 100;
-  const theirPct = (theirPick.ktcValue / maxVal) * 100;
-  const upColor   = 'var(--green, #22c55e)';
-  const downColor = 'var(--yellow, #eab308)';
-  const accentColor = direction === 'up' ? upColor : downColor;
+  const ourFp  = ourPick.fpValue   || 0;
+  const theirFp = theirPick.fpValue || 0;
+  const maxVal  = Math.max(ourFp, theirFp, 1);
+  const ourPct  = (ourFp  / maxVal) * 100;
+  const theirPct = (theirFp / maxVal) * 100;
+  const accentColor = direction === 'up' ? 'var(--green, #22c55e)' : 'var(--yellow, #eab308)';
+
+  const ourKtc   = ourPick.ktcValue   > 0 ? ` / ${Math.round(ourPick.ktcValue).toLocaleString()} KTC`   : '';
+  const theirKtc = theirPick.ktcValue > 0 ? ` / ${Math.round(theirPick.ktcValue).toLocaleString()} KTC` : '';
 
   return (
     <div style={{ marginTop: '0.4rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.15rem' }}>
-        <span>Your {ourPick.label} <span style={{ color: 'var(--text-secondary)' }}>({fmt(ourPick.ktcValue)} KTC)</span></span>
-        <span>Their {theirPick.label} <span style={{ color: 'var(--text-secondary)' }}>({fmt(theirPick.ktcValue)} KTC)</span></span>
+        <span>Your {ourPick.label} <span style={{ color: 'var(--text-secondary)' }}>({ourFp} FP{ourKtc})</span></span>
+        <span>Their {theirPick.label} <span style={{ color: 'var(--text-secondary)' }}>({theirFp} FP{theirKtc})</span></span>
       </div>
       <div style={{ display: 'flex', gap: 3, height: 5, borderRadius: 3, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
         <div style={{ width: `${ourPct}%`, background: 'var(--text-muted)', borderRadius: 3 }} />
@@ -262,10 +275,10 @@ function PackageOption({ pkg, direction }) {
         </div>
       </div>
 
-      {/* Value totals */}
+      {/* Value totals (FP scale) */}
       <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-        <span>You give: <strong style={{ color: giveColor }}>{fmt(pkg.giveTotal)} KTC</strong></span>
-        <span>You get: <strong style={{ color: receiveColor }}>{fmt(pkg.receiveTotal)} KTC</strong></span>
+        <span>You give: <strong style={{ color: giveColor }}>{(pkg.giveTotal || 0).toFixed(1)} FP</strong></span>
+        <span>You get: <strong style={{ color: receiveColor }}>{(pkg.receiveTotal || 0).toFixed(1)} FP</strong></span>
       </div>
 
       {pkg.notes && (
@@ -279,6 +292,7 @@ function PackageOption({ pkg, direction }) {
 
 /* ── Asset pill (pick or player) ──────────────────────────────────────────── */
 function AssetTag({ asset, color }) {
+  const valueStr = assetValueLabel(asset);
   return (
     <span style={{
       fontSize: '0.7rem',
@@ -292,9 +306,9 @@ function AssetTag({ asset, color }) {
     }}>
       {asset.position && <span style={{ opacity: 0.7, marginRight: '0.2rem' }}>{asset.position}</span>}
       {asset.label}
-      {asset.ktcValue > 0 && (
-        <span style={{ opacity: 0.65, fontWeight: 400, marginLeft: '0.25rem' }}>
-          {fmt(asset.ktcValue)}
+      {valueStr && (
+        <span style={{ opacity: 0.6, fontWeight: 400, marginLeft: '0.3rem', fontSize: '0.65rem' }}>
+          {valueStr}
         </span>
       )}
     </span>
