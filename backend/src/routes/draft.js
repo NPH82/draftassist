@@ -10,7 +10,7 @@ const sleeperService = require('../services/sleeperService');
 const { requireAuth } = require('../middleware/auth');
 const { detectValueGap, calcPersonalRankScore } = require('../services/scoringEngine');
 const { predictAvailability, detectFallers } = require('../services/availabilityPredictor');
-const { suggestTradeDown } = require('../services/tradeEngine');
+const { suggestTradeUp, suggestTradeDown } = require('../services/tradeEngine');
 const { enrichProfilesWithDraftClass } = require('../services/learningEngine');
 const { analyzePositionalNeeds, buildRosterComposition, scoreDraftFit } = require('../services/winWindowService');
 const Player = require('../models/Player');
@@ -595,28 +595,34 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
       nextPickNumber: myNextPickNumber - picksUntilMe + 1,
     }));
 
-    // Trade-up advice is never surfaced — giving up capital to move up is bad draft economics.
-    // Strategy is always: trade BACK and still land the target by finding partners in the gap.
-    let tradeDown = [];
+    // Trade-up: only when the target is genuinely at risk of being stolen before our pick
+    // (high availability prob = others will grab them). Trade-down: when they'll fall past us.
+    let tradeUp = [], tradeDown = [];
 
     if (targetPlayerId) {
       const targetPlayer = playerMap[targetPlayerId] || allPlayers.find(p => p._id.toString() === targetPlayerId);
       if (targetPlayer) {
-        // Where is this player expected to fall? Use a slightly conservative window.
         const marketRank = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || myNextPickNumber;
-        const safeUntil = Math.floor(marketRank * 0.92); // confident safe zone (92% of market rank)
 
-        tradeDown = await suggestTradeDown({
-          targetPlayer,
-          ourPickNumber: myNextPickNumber,
-          availableUntilPick: safeUntil,
-          allRosters,
-          userId: sleeperId,
-        });
+        // Trade-up: target projects to go BEFORE our next pick — someone may steal them.
+        // Only surface if market rank < our next pick (we'd be moving up to secure them).
+        const targetGoesBeforeUs = marketRank < myNextPickNumber;
+        const tradeUpUntil = Math.max(1, Math.round(marketRank));
+
+        // Trade-down: target projects to fall PAST our current pick — we can drop back and
+        // still land them while gaining capital. Safe window = 92% of market rank.
+        const safeUntil = Math.floor(marketRank * 0.92);
+
+        [tradeUp, tradeDown] = await Promise.all([
+          targetGoesBeforeUs
+            ? suggestTradeUp({ targetPlayer, ourPickNumber: myNextPickNumber, targetPicksAt: tradeUpUntil, allRosters, playerMap, userId: sleeperId })
+            : Promise.resolve([]),
+          suggestTradeDown({ targetPlayer, ourPickNumber: myNextPickNumber, availableUntilPick: safeUntil, allRosters, userId: sleeperId }),
+        ]);
       }
     }
 
-    res.json({ tradeDown });
+    res.json({ tradeUp, tradeDown });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

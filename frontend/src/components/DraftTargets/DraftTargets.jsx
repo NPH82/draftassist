@@ -100,6 +100,7 @@ function PickTargetCard({ pick, leagueId, draftId, onFeedbackSaved }) {
   };
 
   const handleLoadTrades = async () => {
+    if (trades) { setTrades(null); return; } // toggle off
     if (!draftId || !pick.recommendation?.sleeperId) return;
     setLoadingTrades(true);
     try {
@@ -164,19 +165,60 @@ function PickTargetCard({ pick, leagueId, draftId, onFeedbackSaved }) {
                 marginTop: '0.45rem',
                 padding: '0.45rem 0.55rem',
                 borderRadius: 8,
-                border: '1px solid #7f1d1d55',
-                background: '#7f1d1d1f',
+                border: `1px solid ${pick.strategyHint.type === 'trade_back_or_pivot' ? '#7f1d1d55' : '#1e3a5f55'}`,
+                background: pick.strategyHint.type === 'trade_back_or_pivot' ? '#7f1d1d1f' : '#1e3a5f1f',
               }}
             >
-              <div className="text-xs font-semibold" style={{ color: '#fda4af', marginBottom: '0.15rem' }}>
-                Trade Back / Pivot Alert
+              <div className="text-xs font-semibold" style={{ color: pick.strategyHint.type === 'trade_back_or_pivot' ? '#fda4af' : '#93c5fd', marginBottom: '0.15rem' }}>
+                {pick.strategyHint.type === 'trade_back_or_pivot' ? '↓ Trade Back / Pivot' : '↑ Trade Up Alert'}
               </div>
               <div className="text-xs text-secondary" style={{ marginBottom: '0.25rem' }}>
                 {pick.strategyHint.message}
               </div>
+              {pick.strategyHint.tradeBackPartners?.length > 0 && (
+                <div style={{ marginBottom: '0.2rem' }}>
+                  {pick.strategyHint.tradeBackPartners.slice(0, 2).map((p, i) => (
+                    <div key={i} className="text-xs text-muted">→ {p.username}: pick {p.nextPick} ({p.picksBackFromUs} back)</div>
+                  ))}
+                </div>
+              )}
               {pick.strategyHint.marketRank != null && (
                 <div className="text-xs text-muted">
-                  Market rank ~#{pick.strategyHint.marketRank} · Reach gap {pick.strategyHint.reachGap || 0}
+                  Market rank ~#{pick.strategyHint.marketRank} · Gap {pick.strategyHint.reachGap || 0} picks
+                </div>
+              )}
+              {/* Proactive trade button — visible regardless of agree/disagree status */}
+              {draftId && (
+                <button
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', marginTop: '0.4rem' }}
+                  onClick={handleLoadTrades}
+                  disabled={loadingTrades}
+                >
+                  {loadingTrades ? 'Loading…' : trades ? 'Hide trade details' : 'View trade options'}
+                </button>
+              )}
+              {trades && (
+                <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  {trades.tradeUp?.length > 0 && (
+                    <>
+                      <div className="text-xs font-semibold text-muted">Move up to secure them</div>
+                      {trades.tradeUp.slice(0, 2).map((t, i) => (
+                        <div key={i} className="text-xs" style={{ padding: '0.3rem 0.5rem', background: 'var(--bg-primary)', borderRadius: 6 }}>{t.reason}</div>
+                      ))}
+                    </>
+                  )}
+                  {trades.tradeDown?.length > 0 && (
+                    <>
+                      <div className="text-xs font-semibold text-muted">Trade back + still land them</div>
+                      {trades.tradeDown.slice(0, 2).map((t, i) => (
+                        <div key={i} className="text-xs" style={{ padding: '0.3rem 0.5rem', background: 'var(--bg-primary)', borderRadius: 6 }}>{t.reason}</div>
+                      ))}
+                    </>
+                  )}
+                  {!trades.tradeUp?.length && !trades.tradeDown?.length && (
+                    <div className="text-xs text-muted">No trade partners found in pick window.</div>
+                  )}
                 </div>
               )}
             </div>

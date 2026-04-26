@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import Layout from '../components/Layout/Layout';
 import PlayerCard from '../components/PlayerCard/PlayerCard';
@@ -9,6 +9,7 @@ import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
 import DraftTargets from '../components/DraftTargets/DraftTargets';
 import { DraftProvider, useDraft } from '../context/DraftContext';
+import { getDraftTrades } from '../services/api';
 import { formatEta } from '../utils/formatting';
 
 export default function DraftMode() {
@@ -26,8 +27,24 @@ function DraftModeInner({ draftId }) {
   const [filter, setFilter] = useState('ALL');
   const [showQueue, setShowQueue] = useState(false);
   const [showTargets, setShowTargets] = useState(false);
+  const [hintTrades, setHintTrades] = useState(null);
+  const [loadingHintTrades, setLoadingHintTrades] = useState(false);
 
+  const ds = draftState;
   const leagueId = ds?.leagueId || null;
+
+  const handleLoadHintTrades = useCallback(async () => {
+    if (!draftId || !ds?.strategyHint?.playerId) return;
+    setLoadingHintTrades(true);
+    try {
+      const data = await getDraftTrades(draftId, ds.strategyHint.playerId);
+      setHintTrades(data);
+    } catch {
+      setHintTrades({ tradeUp: [], tradeDown: [] });
+    } finally {
+      setLoadingHintTrades(false);
+    }
+  }, [draftId, ds?.strategyHint?.playerId]);
 
   if (loading) {
     return (
@@ -45,7 +62,6 @@ function DraftModeInner({ draftId }) {
     );
   }
 
-  const ds = draftState;
   const available = (ds?.available || []).filter(p => filter === 'ALL' || p.position === filter);
 
   const positions = ['ALL', 'QB', 'RB', 'WR', 'TE'];
@@ -101,6 +117,74 @@ function DraftModeInner({ draftId }) {
           )}
         </div>
       </div>
+
+      {/* Strategy hint: trade-back or trade-up alert */}
+      {ds?.strategyHint && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.65rem 0.8rem',
+            borderRadius: 8,
+            border: `1px solid ${ds.strategyHint.type === 'trade_back_or_pivot' ? '#7f1d1d88' : '#1e3a5f88'}`,
+            background: ds.strategyHint.type === 'trade_back_or_pivot' ? '#7f1d1d22' : '#1e3a5f22',
+          }}
+        >
+          <div
+            className="text-xs font-semibold"
+            style={{ color: ds.strategyHint.type === 'trade_back_or_pivot' ? '#fda4af' : '#93c5fd', marginBottom: '0.25rem' }}
+          >
+            {ds.strategyHint.type === 'trade_back_or_pivot' ? '⬇ Trade Back / Pivot' : '⬆ Trade Up Alert'}
+          </div>
+          <div className="text-xs text-secondary" style={{ marginBottom: '0.4rem' }}>
+            {ds.strategyHint.message}
+          </div>
+          {/* Trade partner details from strategyHint */}
+          {ds.strategyHint.tradeBackPartners?.length > 0 && (
+            <div style={{ marginBottom: '0.35rem' }}>
+              {ds.strategyHint.tradeBackPartners.slice(0, 3).map((p, i) => (
+                <div key={i} className="text-xs text-muted">
+                  → {p.username}: pick {p.nextPick} ({p.picksBackFromUs} back)
+                </div>
+              ))}
+            </div>
+          )}
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem', marginTop: '0.1rem' }}
+            onClick={hintTrades ? () => setHintTrades(null) : handleLoadHintTrades}
+            disabled={loadingHintTrades}
+          >
+            {loadingHintTrades ? 'Loading…' : hintTrades ? 'Hide trade details' : 'View trade options'}
+          </button>
+          {hintTrades && (
+            <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              {hintTrades.tradeUp?.length > 0 && (
+                <>
+                  <div className="text-xs font-semibold text-muted">Move up to secure them</div>
+                  {hintTrades.tradeUp.slice(0, 2).map((t, i) => (
+                    <div key={i} className="text-xs" style={{ padding: '0.3rem 0.5rem', background: 'var(--bg-card)', borderRadius: 6 }}>
+                      {t.reason}
+                    </div>
+                  ))}
+                </>
+              )}
+              {hintTrades.tradeDown?.length > 0 && (
+                <>
+                  <div className="text-xs font-semibold text-muted">Trade back + still land them</div>
+                  {hintTrades.tradeDown.slice(0, 2).map((t, i) => (
+                    <div key={i} className="text-xs" style={{ padding: '0.3rem 0.5rem', background: 'var(--bg-card)', borderRadius: 6 }}>
+                      {t.reason}
+                    </div>
+                  ))}
+                </>
+              )}
+              {!hintTrades.tradeUp?.length && !hintTrades.tradeDown?.length && (
+                <div className="text-xs text-muted">No specific trade partners found in the draft order window.</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Draft Targets panel (pre-draft / during draft) */}
       {showTargets && leagueId && (
