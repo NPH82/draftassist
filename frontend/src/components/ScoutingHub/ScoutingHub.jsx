@@ -157,50 +157,86 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
 
   const [selectedLeagueId, setSelectedLeagueId] = useState('');
   const [searchText, setSearchText] = useState('');
+  const [viewMode, setViewMode] = useState('all'); // all | league | search
   const [profiles, setProfiles] = useState(null);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState(null);
 
   const searchTimer = useRef(null);
+  const latestRequestId = useRef(0);
 
   // Load default (all leaguemates) on mount
   useEffect(() => {
     setLoading(true);
+    const requestId = ++latestRequestId.current;
     getManagerProfiles()
       .then(data => {
+        if (requestId !== latestRequestId.current) return;
         setProfiles(data.profiles || []);
         setStats({ total: data.totalLeaguemates, profiled: data.totalProfiled, unprofiled: data.unprofiled });
+        setViewMode('all');
       })
-      .catch(() => setProfiles([]))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (requestId !== latestRequestId.current) return;
+        setProfiles([]);
+      })
+      .finally(() => {
+        if (requestId !== latestRequestId.current) return;
+        setLoading(false);
+      });
   }, []);
 
   // When league selection changes, reload
   useEffect(() => {
+    clearTimeout(searchTimer.current);
+
     if (!selectedLeagueId) {
       // Reset to all leaguemates unless there's a search text
       if (!searchText.trim()) {
         setLoading(true);
+        const requestId = ++latestRequestId.current;
         getManagerProfiles()
           .then(data => {
+            if (requestId !== latestRequestId.current) return;
             setProfiles(data.profiles || []);
             setStats({ total: data.totalLeaguemates, profiled: data.totalProfiled, unprofiled: data.unprofiled });
+            setViewMode('all');
           })
-          .catch(() => setProfiles([]))
-          .finally(() => setLoading(false));
+          .catch(() => {
+            if (requestId !== latestRequestId.current) return;
+            setProfiles([]);
+          })
+          .finally(() => {
+            if (requestId !== latestRequestId.current) return;
+            setLoading(false);
+          });
       }
       return;
     }
+
     setSearchText('');
     setLoading(true);
+    const requestId = ++latestRequestId.current;
     getLeagueManagerProfiles(selectedLeagueId)
       .then(data => {
+        if (requestId !== latestRequestId.current) return;
         setProfiles(data.profiles || []);
         setStats({ total: data.totalLeaguemates });
+        setViewMode('league');
       })
-      .catch(() => setProfiles([]))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (requestId !== latestRequestId.current) return;
+        setProfiles([]);
+      })
+      .finally(() => {
+        if (requestId !== latestRequestId.current) return;
+        setLoading(false);
+      });
   }, [selectedLeagueId]);
+
+  useEffect(() => {
+    return () => clearTimeout(searchTimer.current);
+  }, []);
 
   // Debounced manager search
   const handleSearchChange = (e) => {
@@ -212,28 +248,47 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
     if (!q.trim()) {
       // Reset to all leaguemates
       setLoading(true);
+      const requestId = ++latestRequestId.current;
       getManagerProfiles()
         .then(data => {
+          if (requestId !== latestRequestId.current) return;
           setProfiles(data.profiles || []);
           setStats({ total: data.totalLeaguemates, profiled: data.totalProfiled, unprofiled: data.unprofiled });
+          setViewMode('all');
         })
-        .catch(() => setProfiles([]))
-        .finally(() => setLoading(false));
+        .catch(() => {
+          if (requestId !== latestRequestId.current) return;
+          setProfiles([]);
+        })
+        .finally(() => {
+          if (requestId !== latestRequestId.current) return;
+          setLoading(false);
+        });
       return;
     }
     searchTimer.current = setTimeout(() => {
       setLoading(true);
+      const requestId = ++latestRequestId.current;
       searchManagers(q)
         .then(data => {
+          if (requestId !== latestRequestId.current) return;
           setProfiles(data.profiles || []);
           setStats(null);
+          setViewMode('search');
         })
-        .catch(() => setProfiles([]))
-        .finally(() => setLoading(false));
+        .catch(() => {
+          if (requestId !== latestRequestId.current) return;
+          setProfiles([]);
+        })
+        .finally(() => {
+          if (requestId !== latestRequestId.current) return;
+          setLoading(false);
+        });
     }, 350);
   };
 
-  const showWinWindow = Boolean(selectedLeagueId);
+  const showWinWindow = viewMode === 'league' && Boolean(selectedLeagueId);
+  const selectedLeague = leagues.find(lg => lg.leagueId === selectedLeagueId) || null;
 
   // Sort: when league view, sort by win-window (Win Now first), then by picks observed
   const sorted = profiles ? [...profiles].sort((a, b) => {
@@ -293,6 +348,28 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
             <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>Sorted by win window · rebuild status shown</span>
           )}
         </div>
+      )}
+
+      {/* Active view label */}
+      {!loading && viewMode === 'league' && selectedLeague && (
+        <div className="text-xs" style={{
+          alignSelf: 'flex-start',
+          padding: '0.25rem 0.5rem',
+          borderRadius: 999,
+          border: '1px solid var(--border)',
+          background: 'var(--bg-secondary)',
+          color: 'var(--text-secondary)',
+        }}>
+          Showing managers in: <span className="font-semibold">{selectedLeague.name}</span>
+        </div>
+      )}
+
+      {!loading && viewMode === 'all' && (
+        <div className="text-xs text-muted">Showing all leaguemates</div>
+      )}
+
+      {!loading && viewMode === 'search' && searchText.trim() && (
+        <div className="text-xs text-muted">Search results for "{searchText.trim()}"</div>
       )}
 
       {/* Scout button */}
