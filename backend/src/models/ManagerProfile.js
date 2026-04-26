@@ -1,0 +1,43 @@
+const mongoose = require('mongoose');
+
+// Tracks tendencies for a single Sleeper user across all observed drafts
+const managerProfileSchema = new mongoose.Schema({
+  sleeperId: { type: String, required: true, unique: true },
+  username: String,
+
+  // Positional preferences: { QB: 0.3, WR: 0.5, RB: 0.15, TE: 0.05 }
+  positionWeights: {
+    QB: { type: Number, default: 0.25 },
+    RB: { type: Number, default: 0.25 },
+    WR: { type: Number, default: 0.25 },
+    TE: { type: Number, default: 0.25 },
+  },
+
+  // Early-round position tendencies (rounds 1-2)
+  earlyRoundPositionWeights: {
+    QB: { type: Number, default: 0.25 },
+    RB: { type: Number, default: 0.25 },
+    WR: { type: Number, default: 0.25 },
+    TE: { type: Number, default: 0.25 },
+  },
+
+  // Favorite colleges (school name -> frequency count)
+  collegeAffinities: { type: Map, of: Number, default: {} },
+
+  // Favorite NFL teams (team abbreviation -> frequency count)
+  nflTeamAffinities: { type: Map, of: Number, default: {} },
+
+  // ADP deviation: how early/late they draft relative to board (negative = early, positive = late)
+  avgAdpDeviation: { type: Number, default: 0 },
+
+  // Draft history references
+  draftsObserved: [String],  // Sleeper draft IDs
+  totalPicksObserved: { type: Number, default: 0 },
+
+  // Human-readable scouting note (generated)
+  scoutingNotes: [String],
+
+  lastUpdated: { type: Date, default: Date.now },
+}, { timestamps: true });
+
+module.exports = mongoose.model('ManagerProfile', managerProfileSchema);
