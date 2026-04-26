@@ -81,7 +81,10 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
 }
 
 /**
- * Generate trade-down suggestion when a target player is unlikely to be taken soon.
+ * Generate trade-down suggestions: find managers with picks between our pick and the
+ * last safe pick for the target player.  Trading back with them lets us drop a few spots,
+ * still land the target at their natural draft position, and keep extra capital.
+ * We never recommend trading up — moving up costs assets without adding value.
  */
 async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPick, allRosters, userId }) {
   const suggestions = [];
@@ -91,21 +94,29 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
     const theirNextPick = roster.nextPickNumber;
     if (!theirNextPick || theirNextPick <= ourPickNumber || theirNextPick > availableUntilPick) continue;
 
-    const pickValue = estimatePickValue(ourPickNumber);
-    const receivePick = estimatePickValue(theirNextPick);
+    const ourPickValue  = estimatePickValue(ourPickNumber);
+    const theirPickValue = estimatePickValue(theirNextPick);
+    const capitalGained = ourPickValue - theirPickValue; // extra value we capture by dropping back
+
+    const picksBack = theirNextPick - ourPickNumber;
+    const targetMarketPick = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || availableUntilPick;
 
     suggestions.push({
       type: 'trade-down',
-      targetManager: { sleeperId: roster.ownerId, username: roster.ownerUsername },
+      targetManager: { sleeperId: roster.ownerId, username: roster.ownerUsername || roster.ownerName },
       targetPlayer,
       swapOurPick: ourPickNumber,
       receiveTheirPick: theirNextPick,
-      netGain: pickValue - receivePick,
-      reason: `Trade down from pick ${ourPickNumber} -- ${targetPlayer.name} likely available at ${theirNextPick}`,
+      picksBack,
+      capitalGained,
+      targetExpectedPick: Math.round(targetMarketPick),
+      safeZone: theirNextPick < targetMarketPick,
+      reason: `Trade pick ${ourPickNumber} to ${roster.ownerUsername || 'this manager'} — drop ${picksBack} spot${picksBack !== 1 ? 's' : ''} to pick ${theirNextPick}, still land ${targetPlayer.name} (expected ~${Math.round(targetMarketPick)}) + gain ${Math.round(capitalGained)} KTC.`,
     });
   }
 
-  return suggestions;
+  // Sort: safest (most capital gained while still before target falls) first
+  return suggestions.sort((a, b) => (b.safeZone ? 1 : 0) - (a.safeZone ? 1 : 0) || b.capitalGained - a.capitalGained);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ const sleeperService = require('../services/sleeperService');
 const { requireAuth } = require('../middleware/auth');
 const { detectValueGap, calcPersonalRankScore } = require('../services/scoringEngine');
 const { predictAvailability, detectFallers } = require('../services/availabilityPredictor');
-const { suggestTradeUp, suggestTradeDown } = require('../services/tradeEngine');
+const { suggestTradeDown } = require('../services/tradeEngine');
 const { enrichProfilesWithDraftClass } = require('../services/learningEngine');
 const { analyzePositionalNeeds, buildRosterComposition, scoreDraftFit } = require('../services/winWindowService');
 const Player = require('../models/Player');
@@ -132,6 +132,49 @@ function reachPenaltyFromMarket({ player, currentPick, needTier = 'low', availab
 
   penalty *= Math.max(0.8, Math.min(1.6, reachDiscipline || 1));
   return { penalty: Math.round(penalty * 100) / 100, marketRank, gap };
+}
+
+/**
+ * Find managers whose next pick falls in the "safe window" between the user's current pick
+ * and the expected market pick number of the target player.  These managers can be traded
+ * WITH (give them your earlier pick, receive their later pick + assets) so you still land
+ * the target while gaining draft capital.
+ *
+ * @param {object[]} rosters        - All league rosters (excluding user's)
+ * @param {object}   draftOrder     - Sleeper draft_order map { sleeperId -> slotNumber }
+ * @param {number}   currentPick    - Current overall pick number
+ * @param {number}   safeUntilPick  - Last pick number where target is still expected available
+ * @param {number}   totalRosters   - Teams in the league
+ * @returns {Array<{ownerId, username, nextPick}>}
+ */
+function findTradeBackPartners({ rosters, draftOrder, currentPick, safeUntilPick, totalRosters }) {
+  // Invert draft_order: slotNumber -> sleeperId
+  const slotToOwner = {};
+  for (const [ownerId, slot] of Object.entries(draftOrder || {})) {
+    slotToOwner[slot] = ownerId;
+  }
+
+  // Determine the slot that picks next after currentPick
+  const currentSlot = ((currentPick - 1) % totalRosters) + 1;
+
+  const partners = [];
+  for (let pickNum = currentPick + 1; pickNum <= safeUntilPick; pickNum++) {
+    const slot = ((pickNum - 1) % totalRosters) + 1;
+    const ownerId = slotToOwner[slot];
+    if (!ownerId) continue;
+    const roster = rosters.find(r => r.ownerId === ownerId);
+    if (!roster) continue;
+    // Avoid duplicates (same manager can have multiple picks in range for multi-round drafts)
+    if (partners.some(p => p.ownerId === ownerId)) continue;
+    partners.push({
+      ownerId,
+      username: roster.ownerUsername || roster.ownerName || ownerId,
+      nextPick: pickNum,
+      picksBackFromUs: pickNum - currentPick,
+    });
+  }
+
+  return partners;
 }
 
 async function estimateReachDiscipline(profile) {
@@ -450,17 +493,55 @@ router.get('/:draftId', requireAuth, async (req, res) => {
     // but could still be the consensus 'obvious' pick that the community will reach for.
     const top5 = withAvailability.slice(0, 5);
     const tradeBackRec = top5.find(p => p.tradeBackCandidate) || null;
-    const strategyHint = tradeBackRec
-      ? {
-          type: 'trade_back_or_pivot',
-          message: `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || currentOverallPick)} by market consensus — you're at ${currentOverallPick}. Consider trading back or taking better value now (${top5.filter(p => !p.tradeBackCandidate).map(p => p.name).slice(0, 2).join(', ')}).`,
-          playerId: tradeBackRec.sleeperId || tradeBackRec._id,
-          marketRank: Math.round(tradeBackRec.marketRank || currentOverallPick),
-          currentPick: currentOverallPick,
-          reachGap: Math.round(tradeBackRec.marketReachGap || 0),
-          availabilityProb: tradeBackRec.availabilityProb,
-        }
-      : null;
+
+    let strategyHint = null;
+    if (tradeBackRec) {
+      const safeUntil = Math.max(
+        currentOverallPick + 1,
+        Math.floor((tradeBackRec.marketRank || currentOverallPick) - 1)
+      );
+
+      // Find managers with picks in the gap — they're your trade-back partners.
+      const partners = findTradeBackPartners({
+        rosters: league?.rosters.filter(r => r.ownerId !== sleeperId) || [],
+        draftOrder: draftData.draft_order || {},
+        currentPick: currentOverallPick,
+        safeUntilPick: safeUntil,
+        totalRosters,
+      });
+
+      const betterNowOptions = top5
+        .filter(p => !p.tradeBackCandidate)
+        .map(p => p.name)
+        .slice(0, 2);
+
+      let message;
+      if (partners.length > 0) {
+        const partnerNames = partners.slice(0, 2).map(p =>
+          `${p.username} (pick ${p.nextPick}, ${p.picksBackFromUs} back)`
+        ).join(' or ');
+        message = `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || currentOverallPick)} — market says they'll fall. ` +
+          `Trade back with ${partnerNames}: give them your pick ${currentOverallPick}, drop ${partners[0].picksBackFromUs} spots, ` +
+          `still land ${tradeBackRec.name} + gain draft capital.` +
+          (betterNowOptions.length ? ` Or take better value now: ${betterNowOptions.join(', ')}.` : '');
+      } else {
+        message = `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || currentOverallPick)} — no easy trade-back window found. ` +
+          `Taking better value now is recommended` +
+          (betterNowOptions.length ? `: ${betterNowOptions.join(', ')}.` : '.');
+      }
+
+      strategyHint = {
+        type: 'trade_back_or_pivot',
+        message,
+        playerId: tradeBackRec.sleeperId || tradeBackRec._id,
+        marketRank: Math.round(tradeBackRec.marketRank || currentOverallPick),
+        currentPick: currentOverallPick,
+        reachGap: Math.round(tradeBackRec.marketReachGap || 0),
+        availabilityProb: tradeBackRec.availabilityProb,
+        tradeBackPartners: partners,
+        betterValueNow: betterNowOptions,
+      };
+    }
 
     res.json({
       draftId,
@@ -514,22 +595,28 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
       nextPickNumber: myNextPickNumber - picksUntilMe + 1,
     }));
 
-    let tradeUp = [], tradeDown = [];
+    // Trade-up advice is never surfaced — giving up capital to move up is bad draft economics.
+    // Strategy is always: trade BACK and still land the target by finding partners in the gap.
+    let tradeDown = [];
 
     if (targetPlayerId) {
       const targetPlayer = playerMap[targetPlayerId] || allPlayers.find(p => p._id.toString() === targetPlayerId);
       if (targetPlayer) {
-        const targetAdp = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || myNextPickNumber - 3;
-        const availUntil = targetPlayer.underdogAdp ? Math.round(targetPlayer.underdogAdp + 5) : myNextPickNumber + 5;
+        // Where is this player expected to fall? Use a slightly conservative window.
+        const marketRank = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || myNextPickNumber;
+        const safeUntil = Math.floor(marketRank * 0.92); // confident safe zone (92% of market rank)
 
-        [tradeUp, tradeDown] = await Promise.all([
-          suggestTradeUp({ targetPlayer, ourPickNumber: myNextPickNumber, targetPicksAt: Math.round(targetAdp), allRosters, playerMap, userId: sleeperId }),
-          suggestTradeDown({ targetPlayer, ourPickNumber: myNextPickNumber, availableUntilPick: availUntil, allRosters, userId: sleeperId }),
-        ]);
+        tradeDown = await suggestTradeDown({
+          targetPlayer,
+          ourPickNumber: myNextPickNumber,
+          availableUntilPick: safeUntil,
+          allRosters,
+          userId: sleeperId,
+        });
       }
     }
 
-    res.json({ tradeUp, tradeDown });
+    res.json({ tradeDown });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
