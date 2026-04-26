@@ -3,11 +3,13 @@
  * Computes Roster Maturity Score and win window label from a roster.
  */
 
-const REBUILD_LABELS = {
+const OUTLOOK_LABELS = {
   rebuilding: 'Rebuilding',
-  transitioning: 'Transitioning',
+  retooling: 'Re-Tooling',
   contending: 'Contending',
-  winNow: 'Win Now',
+  sustainableContender: 'Sustainable Contender',
+  builtToWin: 'Built To Win',
+  agingContender: 'Aging Contender',
 };
 
 function estimatedValueFromProfile(player = {}) {
@@ -24,6 +26,10 @@ function estimatedValueFromProfile(player = {}) {
   return Math.round(base * 0.65);
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
 /**
  * playerMap: { sleeperId -> { age, ktcValue, fantasyProsValue, position } }
  * picks: array of future pick objects from Sleeper
@@ -31,7 +37,22 @@ function estimatedValueFromProfile(player = {}) {
  */
 function computeRosterMaturity(rosterPlayerIds, playerMap, futurePicks = []) {
   if (!rosterPlayerIds || rosterPlayerIds.length === 0) {
-    return { score: 50, label: REBUILD_LABELS.transitioning, reason: 'No roster data available' };
+    return {
+      score: 40,
+      label: OUTLOOK_LABELS.retooling,
+      reason: 'Insufficient roster data to project competitive outlook',
+      metrics: {
+        playersCount: 0,
+        avgAge: 25,
+        avgValue: 0,
+        primePct: 0,
+        youngPct: 0,
+        agingPct: 0,
+        topMetricCount: 0,
+        eliteCount: 0,
+        futureFirsts: 0,
+      },
+    };
   }
 
   const skillPositions = ['QB', 'RB', 'WR', 'TE'];
@@ -40,7 +61,22 @@ function computeRosterMaturity(rosterPlayerIds, playerMap, futurePicks = []) {
     .filter(p => p && skillPositions.includes(p.position));
 
   if (players.length === 0) {
-    return { score: 50, label: REBUILD_LABELS.transitioning, reason: 'No mapped skill players' };
+    return {
+      score: 40,
+      label: OUTLOOK_LABELS.retooling,
+      reason: 'No mapped QB/RB/WR/TE players available for outlook modeling',
+      metrics: {
+        playersCount: 0,
+        avgAge: 25,
+        avgValue: 0,
+        primePct: 0,
+        youngPct: 0,
+        agingPct: 0,
+        topMetricCount: 0,
+        eliteCount: 0,
+        futureFirsts: 0,
+      },
+    };
   }
 
   // 1. Average age of skill players (younger = more rebuilding)
@@ -51,53 +87,227 @@ function computeRosterMaturity(rosterPlayerIds, playerMap, futurePicks = []) {
   const totalValue = players.reduce((sum, p) => sum + estimatedValueFromProfile(p), 0);
   const avgValue = players.length ? totalValue / players.length : 0;
 
-  // 3. Ratio of established starters (market-proven or prime-age contributors)
-  const established = players.filter((p) => {
-    const marketValue = p.ktcValue || p.fantasyProsValue || 0;
-    if (marketValue >= 3000) return true;
-    return (p.age || 0) >= 24 && (p.age || 0) <= 30;
-  });
-  const establishedRatio = established.length / players.length;
+  const primeCount = players.filter(p => (p.age || 0) >= 24 && (p.age || 0) <= 28).length;
+  const youngCount = players.filter(p => (p.age || 0) <= 23).length;
+  const agingCount = players.filter(p => (p.age || 0) >= 29).length;
 
-  // 4. Future first-round picks (rebuild indicator if holding many)
+  // Top market metric players (KTC / FP-rank signals)
+  const topMetricCount = players.filter(p => ((p.ktcValue || 0) >= 6000) || ((p.fantasyProsRank || 9999) <= 24)).length;
+  const eliteCount = players.filter(p => ((p.ktcValue || 0) >= 7500) || ((p.fantasyProsRank || 9999) <= 12)).length;
+
+  // Starter/proven quality depth across positions
+  const incumbents = buildIncumbentProfiles(rosterPlayerIds, playerMap);
+  const starterQualityCount = Object.values(incumbents).reduce((sum, p) => sum + (p.starters || 0), 0);
+  const provenQualityCount = Object.values(incumbents).reduce((sum, p) => sum + (p.proven || 0), 0);
+
+  // 4. Future first-round picks (supports sustainability / re-tool flexibility)
   const firstRoundPicks = futurePicks.filter(p => p.round === 1 && p.season > new Date().getFullYear());
-  const hasManyFuturePicks = firstRoundPicks.length >= 2;
+  const futureFirsts = firstRoundPicks.length;
 
-  // ── Compute composite score (0-100; higher = more "win now") ──────────────
+  // ── Compute composite score (0-100; higher = stronger current contender profile) ──
   let score = 0;
 
-  // Age factor (0-30 pts): older average = more "win now"
-  // Scale: age 22 = 0, age 30 = 30
-  score += Math.min(30, Math.max(0, (avgAge - 22) / 8 * 30));
+  // Market value strength
+  score += clamp((avgValue / 7000) * 35, 0, 35);
 
-  // Value factor (0-30 pts)
-  score += Math.min(30, avgValue / 10000 * 30);
+  // Prime-window concentration
+  score += (primeCount / players.length) * 18;
 
-  // Established ratio (0-30 pts)
-  score += establishedRatio * 30;
+  // Top-end fantasy metric presence
+  score += (topMetricCount / players.length) * 20;
+  score += Math.min(12, eliteCount * 3);
 
-  // Future picks penalty (rebuilding signal)
-  if (hasManyFuturePicks) score -= 15;
+  // Depth quality and proven contributors
+  score += Math.min(9, starterQualityCount * 1.2);
+  score += Math.min(6, provenQualityCount * 1.5);
 
-  score = Math.max(0, Math.min(100, score));
+  // Aging-out risk and youth-heavy volatility
+  score -= (agingCount / players.length) * 16;
+  score -= (youngCount / players.length) * 6;
 
-  // ── Label ─────────────────────────────────────────────────────────────────
+  // Holding many future firsts usually implies less all-in posture now
+  score -= Math.min(6, futureFirsts * 2);
+
+  score = clamp(score, 0, 100);
+
+  // ── Baseline label (league-relative adjustment happens separately) ───────
   let label, reason;
-  if (score < 25) {
-    label = REBUILD_LABELS.rebuilding;
-    reason = `Rebuilding -- young roster (avg age ${avgAge.toFixed(1)}) with limited established starters`;
-  } else if (score < 50) {
-    label = REBUILD_LABELS.transitioning;
-    reason = `Transitioning -- mix of young and established players`;
-  } else if (score < 75) {
-    label = REBUILD_LABELS.contending;
-    reason = `Contending -- strong established core with upside`;
+  if (score >= 78) {
+    label = OUTLOOK_LABELS.builtToWin;
+    reason = `Built to win now: ${topMetricCount} top-metric assets and strong starter quality depth`;
+  } else if (score >= 66) {
+    label = OUTLOOK_LABELS.contending;
+    reason = `Contending profile with a prime-core concentration (${Math.round((primeCount / players.length) * 100)}%)`;
+  } else if (score >= 46) {
+    label = OUTLOOK_LABELS.retooling;
+    reason = `Re-tooling profile: mixed core with uneven impact concentration across positions`;
   } else {
-    label = REBUILD_LABELS.winNow;
-    reason = `Win Now -- veteran-heavy roster with high trade value`;
+    label = OUTLOOK_LABELS.rebuilding;
+    reason = `Rebuilding profile with limited top-end production concentration`;
   }
 
-  return { score: Math.round(score), label, reason };
+  return {
+    score: Math.round(score),
+    label,
+    reason,
+    metrics: {
+      playersCount: players.length,
+      avgAge,
+      avgValue,
+      primePct: players.length ? (primeCount / players.length) : 0,
+      youngPct: players.length ? (youngCount / players.length) : 0,
+      agingPct: players.length ? (agingCount / players.length) : 0,
+      topMetricCount,
+      eliteCount,
+      futureFirsts,
+      starterQualityCount,
+      provenQualityCount,
+    },
+  };
+}
+
+function classifyLeagueOutlook(entry, teamCount) {
+  const scoreRank = entry.scoreRank || teamCount;
+  const standingRank = entry.standingRank || null;
+  const percentile = teamCount <= 1 ? 1 : (teamCount - scoreRank) / (teamCount - 1);
+  const m = entry.metrics || {};
+
+  const topTier = scoreRank <= Math.max(2, Math.ceil(teamCount * 0.2));
+  const playoffTier = scoreRank <= Math.max(4, Math.ceil(teamCount * 0.45));
+  const lowerTier = scoreRank > Math.floor(teamCount * 0.65);
+  const finishedStrong = standingRank && standingRank <= Math.max(3, Math.ceil(teamCount * 0.25));
+  const finishedWeak = standingRank && standingRank >= Math.floor(teamCount * 0.75);
+
+  const agingHeavy = (m.agingPct || 0) >= 0.36;
+  const primeHeavy = (m.primePct || 0) >= 0.44;
+  const hasEliteCore = (m.eliteCount || 0) >= 3 || (m.topMetricCount || 0) >= 5;
+  const hasFutureFlex = (m.futureFirsts || 0) >= 2;
+
+  if (topTier && (finishedStrong || percentile >= 0.82) && hasEliteCore) {
+    if (agingHeavy && !hasFutureFlex) return OUTLOOK_LABELS.agingContender;
+    if (primeHeavy && hasFutureFlex) return OUTLOOK_LABELS.sustainableContender;
+    return OUTLOOK_LABELS.builtToWin;
+  }
+
+  if (playoffTier || percentile >= 0.62) {
+    if (agingHeavy && !hasFutureFlex) return OUTLOOK_LABELS.agingContender;
+    if (primeHeavy && hasFutureFlex) return OUTLOOK_LABELS.sustainableContender;
+    return OUTLOOK_LABELS.contending;
+  }
+
+  if (lowerTier || finishedWeak) {
+    if ((m.youngPct || 0) >= 0.34 || hasFutureFlex) return OUTLOOK_LABELS.rebuilding;
+    return OUTLOOK_LABELS.retooling;
+  }
+
+  return OUTLOOK_LABELS.retooling;
+}
+
+function buildLeagueOutlookReason(entry, teamCount) {
+  const m = entry.metrics || {};
+  const reasons = [];
+  const scoreRank = entry.scoreRank || teamCount;
+  const standingRank = entry.standingRank || null;
+  const wins = entry.wins || 0;
+  const losses = entry.losses || 0;
+
+  reasons.push(`Roster profile ranks #${scoreRank} of ${teamCount} in this league`);
+
+  if (standingRank) {
+    reasons.push(`Last-season finish: #${standingRank} (${wins}-${losses}${entry.ties ? `-${entry.ties}` : ''})`);
+  }
+
+  reasons.push(`Prime-window share ${Math.round((m.primePct || 0) * 100)}%`);
+
+  if ((m.agingPct || 0) >= 0.36) {
+    reasons.push(`Aging-out risk: ${Math.round((m.agingPct || 0) * 100)}% age 29+`);
+  }
+
+  if ((m.topMetricCount || 0) > 0) {
+    reasons.push(`${m.topMetricCount} players rate in top fantasy market signals`);
+  }
+
+  const needs = entry.positionalNeeds || {};
+  const needsText = Object.entries(needs)
+    .filter(([, need]) => need === 'high' || need === 'medium')
+    .map(([pos, need]) => `${pos} (${need})`)
+    .join(', ');
+
+  if (needsText) {
+    reasons.push(`Needs attention: ${needsText}`);
+  }
+
+  return reasons.join('. ');
+}
+
+function computeLeagueOutlooks(rosters = [], playerMap, rosterPositions = [], scoringSettings = {}) {
+  const enriched = (rosters || []).map((roster) => {
+    const playerIds = roster.playerIds || [];
+    const allPlayerIds = roster.allPlayerIds || playerIds;
+    const maturity = computeRosterMaturity(playerIds, playerMap, roster.picks || []);
+    const positionalNeeds = analyzePositionalNeeds(allPlayerIds, playerMap, rosterPositions, scoringSettings);
+
+    const wins = Number(roster.wins || 0);
+    const losses = Number(roster.losses || 0);
+    const ties = Number(roster.ties || 0);
+    const pointsFor = Number(roster.pointsFor || 0);
+
+    return {
+      ...roster,
+      maturity,
+      positionalNeeds,
+      wins,
+      losses,
+      ties,
+      pointsFor,
+    };
+  });
+
+  const teamCount = enriched.length || 1;
+
+  const byScore = [...enriched].sort((a, b) => (b.maturity.score || 0) - (a.maturity.score || 0));
+  const scoreRankMap = new Map(byScore.map((r, i) => [r.rosterId, i + 1]));
+
+  const hasStandingsData = enriched.some(r => (r.wins + r.losses + r.ties) > 0 || r.pointsFor > 0);
+  const standingsRankMap = new Map();
+  if (hasStandingsData) {
+    const byStandings = [...enriched].sort((a, b) => {
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      return b.pointsFor - a.pointsFor;
+    });
+    byStandings.forEach((r, i) => standingsRankMap.set(r.rosterId, i + 1));
+  }
+
+  return enriched.map((entry) => {
+    const scoreRank = scoreRankMap.get(entry.rosterId) || teamCount;
+    const standingRank = standingsRankMap.get(entry.rosterId) || null;
+    const outlookEntry = {
+      ...entry,
+      scoreRank,
+      standingRank,
+      metrics: entry.maturity.metrics,
+    };
+
+    const winWindowLabel = classifyLeagueOutlook(outlookEntry, teamCount);
+    const winWindowReason = buildLeagueOutlookReason({ ...outlookEntry, positionalNeeds: entry.positionalNeeds }, teamCount);
+
+    return {
+      rosterId: entry.rosterId,
+      rosterMaturityScore: entry.maturity.score,
+      winWindowLabel,
+      winWindowReason,
+      positionalNeeds: entry.positionalNeeds,
+      outlookMeta: {
+        scoreRank,
+        standingRank,
+        wins: entry.wins,
+        losses: entry.losses,
+        ties: entry.ties,
+        pointsFor: entry.pointsFor,
+        metrics: entry.maturity.metrics,
+      },
+    };
+  });
 }
 
 function countSkillPlayers(rosterPlayerIds, playerMap) {
@@ -347,6 +557,7 @@ function analyzePositionalNeeds(rosterPlayerIds, playerMap, rosterPositions = []
 
 module.exports = {
   computeRosterMaturity,
+  computeLeagueOutlooks,
   analyzePositionalNeeds,
   buildRosterComposition,
   scoreDraftFit,

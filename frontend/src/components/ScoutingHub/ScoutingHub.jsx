@@ -5,7 +5,14 @@ import WinWindowBadge from '../WinWindow/WinWindowBadge';
 
 const POS_COLOR = { QB: 'var(--blue)', RB: 'var(--green)', WR: 'var(--yellow)', TE: 'var(--red)' };
 
-const WIN_WINDOW_ORDER = ['Win Now', 'Contending', 'Transitioning', 'Rebuilding'];
+const WIN_WINDOW_ORDER = [
+  'Built To Win',
+  'Sustainable Contender',
+  'Contending',
+  'Aging Contender',
+  'Re-Tooling',
+  'Rebuilding',
+];
 
 function ManagerCard({ p, showWinWindow }) {
   const [expanded, setExpanded] = useState(false);

@@ -9,10 +9,17 @@ const rosterSchema = new mongoose.Schema({
   taxiPlayerIds: [String],   // Sleeper taxi squad player IDs
   allPlayerIds: [String],    // Combined starters + taxi IDs for depth planning
   picks: mongoose.Schema.Types.Mixed,  // future picks from Sleeper
+  wins: Number,
+  losses: Number,
+  ties: Number,
+  pointsFor: Number,
+  standingRank: Number,
+  scoreRank: Number,
   // Computed win window
   rosterMaturityScore: Number,
-  winWindowLabel: { type: String, enum: ['Rebuilding', 'Contending', 'Win Now', 'Transitioning'] },
+  winWindowLabel: String,
   winWindowReason: String,
+  outlookMeta: mongoose.Schema.Types.Mixed,
 }, { _id: false });
 
 const leagueSchema = new mongoose.Schema({

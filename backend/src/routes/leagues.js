@@ -9,7 +9,7 @@ const router = express.Router();
 const sleeperService = require('../services/sleeperService');
 const { requireAuth } = require('../middleware/auth');
 const {
-  computeRosterMaturity,
+  computeLeagueOutlooks,
   analyzePositionalNeeds,
   buildRosterComposition,
   scoreDraftFit,
@@ -141,13 +141,12 @@ router.get('/', requireAuth, async (req, res) => {
       const rosters = await sleeperService.getRosters(sl.league_id);
       const users = await sleeperService.buildUserMap(sl.league_id);
 
-      const processedRosters = rosters.map(r => {
+      const baseRosters = rosters.map(r => {
         const playerIds = r.players || [];
         const taxiPlayerIds = r.taxi || [];
         const allPlayerIds = [...new Set([...playerIds, ...taxiPlayerIds])];
-        const futurePicks = r.picks || [];
-        const maturity = computeRosterMaturity(playerIds, playerMap, futurePicks);
-        const needs = analyzePositionalNeeds(allPlayerIds, playerMap, sl.roster_positions, sl.scoring_settings);
+        const settings = r.settings || {};
+        const pointsFor = Number(settings.fpts || 0) + (Number(settings.fpts_decimal || 0) / 100);
         return {
           rosterId: r.roster_id,
           ownerId: r.owner_id,
@@ -156,10 +155,29 @@ router.get('/', requireAuth, async (req, res) => {
           taxiPlayerIds,
           allPlayerIds,
           picks: r.picks,
-          rosterMaturityScore: maturity.score,
-          winWindowLabel: maturity.label,
-          winWindowReason: maturity.reason,
-          positionalNeeds: needs,
+          wins: Number(settings.wins || 0),
+          losses: Number(settings.losses || 0),
+          ties: Number(settings.ties || 0),
+          pointsFor,
+        };
+      });
+
+      const leagueOutlooks = computeLeagueOutlooks(baseRosters, playerMap, sl.roster_positions, sl.scoring_settings);
+      const outlookByRosterId = Object.fromEntries(
+        leagueOutlooks.map(o => [o.rosterId, o])
+      );
+
+      const processedRosters = baseRosters.map((r) => {
+        const outlook = outlookByRosterId[r.rosterId] || {};
+        return {
+          ...r,
+          rosterMaturityScore: outlook.rosterMaturityScore,
+          winWindowLabel: outlook.winWindowLabel,
+          winWindowReason: outlook.winWindowReason,
+          positionalNeeds: outlook.positionalNeeds || analyzePositionalNeeds(r.allPlayerIds, playerMap, sl.roster_positions, sl.scoring_settings),
+          standingRank: outlook.outlookMeta?.standingRank || null,
+          scoreRank: outlook.outlookMeta?.scoreRank || null,
+          outlookMeta: outlook.outlookMeta || null,
         };
       });
 

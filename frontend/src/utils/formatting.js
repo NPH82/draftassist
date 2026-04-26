@@ -26,8 +26,10 @@ export function dasClass(score) {
 }
 
 export function winWindowColor(label) {
-  if (label === 'Win Now') return 'text-green';
+  if (label === 'Built To Win') return 'text-green';
+  if (label === 'Sustainable Contender') return 'text-green';
+  if (label === 'Aging Contender') return 'text-yellow';
   if (label === 'Contending') return 'text-accent';
-  if (label === 'Transitioning') return 'text-yellow';
+  if (label === 'Re-Tooling') return 'text-yellow';
   return 'text-secondary';
 }
