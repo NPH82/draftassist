@@ -98,15 +98,24 @@ function marketRankSignal(player = {}, fallbackRank = 999) {
   const adp = Number(player.underdogAdp || 0);
   const fp = Number(player.fantasyProsRank || 0);
   if (adp > 0) return adp;
-  if (fp > 0) return fp;
+  // For devy/rookie players without ADP data, FP rank alone can be overoptimistic.
+  // Use personal rank as a floor (pessimistic signal) — if user ranks a player later
+  // than FP consensus, that's real signal that the player doesn't need to be reached for.
+  if (fp > 0) {
+    const personal = Number(player.personalRank || 0);
+    return personal > fp ? Math.round((fp + personal) / 2) : fp;
+  }
   return fallbackRank;
 }
 
 function reachPenaltyFromMarket({ player, currentPick, needTier = 'low', availabilityProb = null, reachDiscipline = 1, fallbackRank = 999 }) {
   const marketRank = marketRankSignal(player, fallbackRank);
   const gap = marketRank - currentPick; // positive means likely available later
+  // Top-6 picks: even 1 pick of gap is meaningful — that's real draft capital.
+  // Picks 7-12: allow 2 pick buffer. Later: 4 pick buffer.
+  const topPick = currentPick <= 6;
   const earlyPick = currentPick <= 12;
-  const threshold = earlyPick ? 2 : 4;
+  const threshold = topPick ? 1 : earlyPick ? 2 : 4;
   if (gap <= threshold) return { penalty: 0, marketRank, gap };
 
   let penalty = Math.min(earlyPick ? 34 : 24, (gap - threshold) * (earlyPick ? 2.05 : 1.35));
@@ -379,6 +388,8 @@ router.get('/:draftId', requireAuth, async (req, res) => {
           ? 12
           : (positionalNeeds[p.position] || 'low') === 'medium' ? 5 : 0;
         const recScore = base + fit + needBonus - penalty;
+        // Gap threshold to flag trade-back: tighter at premium picks.
+        const tbGapThreshold = currentOverallPick <= 6 ? 3 : currentOverallPick <= 12 ? 5 : 8;
         return {
           ...p,
           availabilityProb,
@@ -386,7 +397,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
           marketReachGap: gap,
           reachPenalty: penalty,
           recScore,
-          tradeBackCandidate: gap >= 8 && (availabilityProb == null || availabilityProb >= 0.6),
+          tradeBackCandidate: gap >= tbGapThreshold && (availabilityProb == null || availabilityProb >= 0.5),
         };
       }).sort((a, b) => (b.recScore || 0) - (a.recScore || 0));
     } else {
@@ -410,6 +421,8 @@ router.get('/:draftId', requireAuth, async (req, res) => {
         const fit = scoreDraftFit(p, rosterComposition, teamContext);
         const needBonus = needTier === 'high' ? 12 : needTier === 'medium' ? 5 : 0;
         const recScore = base + fit + needBonus - penalty;
+        // Gap threshold to flag trade-back: tighter at premium picks.
+        const tbGapThreshold = currentOverallPick <= 6 ? 3 : currentOverallPick <= 12 ? 5 : 8;
         return {
           ...p,
           availabilityProb,
@@ -419,7 +432,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
           needTier,
           needOrder: needOrder[needTier],
           recScore,
-          tradeBackCandidate: gap >= 8 && (availabilityProb == null || availabilityProb >= 0.6),
+          tradeBackCandidate: gap >= tbGapThreshold && (availabilityProb == null || availabilityProb >= 0.5),
         };
       }).sort((a, b) => (b.recScore || 0) - (a.recScore || 0));
     }
@@ -433,16 +446,19 @@ router.get('/:draftId', requireAuth, async (req, res) => {
     const targetIds = recommended.slice(0, 10).map(p => p.sleeperId).filter(Boolean);
     const fallers = detectFallers(availablePlayers, picks, targetIds);
 
-    const topRec = withAvailability[0] || null;
-    const strategyHint = topRec && topRec.tradeBackCandidate
+    // Scan top-5 for trade-back signal — the reach player might not rank #1 after penalty
+    // but could still be the consensus 'obvious' pick that the community will reach for.
+    const top5 = withAvailability.slice(0, 5);
+    const tradeBackRec = top5.find(p => p.tradeBackCandidate) || null;
+    const strategyHint = tradeBackRec
       ? {
           type: 'trade_back_or_pivot',
-          message: `${topRec.name} projects later than current pick (${Math.round(topRec.marketRank || currentOverallPick)} vs ${currentOverallPick}). Consider trade-back or pivot BPA.`,
-          playerId: topRec.sleeperId || topRec._id,
-          marketRank: Math.round(topRec.marketRank || currentOverallPick),
+          message: `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || currentOverallPick)} by market consensus — you're at ${currentOverallPick}. Consider trading back or taking better value now (${top5.filter(p => !p.tradeBackCandidate).map(p => p.name).slice(0, 2).join(', ')}).`,
+          playerId: tradeBackRec.sleeperId || tradeBackRec._id,
+          marketRank: Math.round(tradeBackRec.marketRank || currentOverallPick),
           currentPick: currentOverallPick,
-          reachGap: Math.round(topRec.marketReachGap || 0),
-          availabilityProb: topRec.availabilityProb,
+          reachGap: Math.round(tradeBackRec.marketReachGap || 0),
+          availabilityProb: tradeBackRec.availabilityProb,
         }
       : null;
 
