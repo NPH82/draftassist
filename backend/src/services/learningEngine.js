@@ -64,7 +64,7 @@ async function updateManagerProfile(sleeperId, username, picks, draftId) {
   const profile = await ManagerProfile.findOneAndUpdate(
     { sleeperId },
     { $setOnInsert: { sleeperId } },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 
   // Skip if this draft was already counted for this manager
@@ -254,7 +254,7 @@ async function updateManagerProfile(rosterId, picks, draftId) {
   const profile = await ManagerProfile.findOneAndUpdate(
     { sleeperId: rosterId },
     { $setOnInsert: { sleeperId: rosterId } },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 
   // Count positions drafted

@@ -65,7 +65,7 @@ router.get('/', requireAuth, async (req, res) => {
           rosters: processedRosters,
           lastUpdated: new Date(),
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
 
       return {

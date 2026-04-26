@@ -49,7 +49,7 @@ router.post('/login', async (req, res) => {
       sessionExpires,
       lastLogin: new Date(),
     },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 
   res.json({
