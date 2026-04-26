@@ -635,8 +635,25 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
       };
     });
 
-    // Trade-up: only when the target is genuinely at risk of being stolen before our pick
-    // (high availability prob = others will grab them). Trade-down: when they'll fall past us.
+    // Build a list of the user's tradeable players for package generation
+    const myRoster = allRosters.find(r => r.ownerId === sleeperId);
+    const myPlayerIds = myRoster?.playerIds || myRoster?.allPlayerIds || [];
+    const myTradablePlayers = myPlayerIds
+      .map(id => playerMap[id])
+      .filter(p => p && p.name && (p.ktcValue || 0) > 0)
+      .sort((a, b) => (b.ktcValue || 0) - (a.ktcValue || 0));
+
+    // Determine our own positional need (for trade-down returns)
+    const { analyzePositionalNeeds, buildRosterComposition } = require('../services/winWindowService');
+    const rosterPlayerMap = Object.fromEntries(myTradablePlayers.map(p => [p.sleeperId, p]));
+    const positionalNeeds = analyzePositionalNeeds(
+      myPlayerIds,
+      rosterPlayerMap,
+      league?.rosterPositions || [],
+      league?.scoringSettings || {}
+    );
+    const ourPositionalNeed = positionalNeeds?.biggestNeed || 'WR';
+
     let tradeUp = [], tradeDown = [];
     let targetExpectedPick = null;
 
@@ -651,20 +668,30 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
         });
         targetExpectedPick = marketRank;
 
-        // Trade-up: target projects to go BEFORE our next pick — someone may steal them.
-        // Only surface if market rank < our next pick (we'd be moving up to secure them).
         const targetGoesBeforeUs = marketRank < myNextPickNumber;
         const tradeUpUntil = Math.max(1, Math.round(marketRank));
-
-        // Trade-down: target projects to fall PAST our current pick — we can drop back and
-        // still land them while gaining capital.
         const safeUntil = Math.max(myNextPickNumber + 1, Math.round(marketRank - 1));
 
         [tradeUp, tradeDown] = await Promise.all([
           targetGoesBeforeUs
-            ? suggestTradeUp({ targetPlayer, ourPickNumber: myNextPickNumber, targetPicksAt: tradeUpUntil, allRosters, playerMap, userId: sleeperId })
+            ? suggestTradeUp({
+                targetPlayer,
+                ourPickNumber: myNextPickNumber,
+                targetPicksAt: tradeUpUntil,
+                allRosters,
+                playerMap,
+                userId: sleeperId,
+                ourPlayers: myTradablePlayers,
+              })
             : Promise.resolve([]),
-          suggestTradeDown({ targetPlayer, ourPickNumber: myNextPickNumber, availableUntilPick: safeUntil, allRosters, userId: sleeperId }),
+          suggestTradeDown({
+            targetPlayer,
+            ourPickNumber: myNextPickNumber,
+            availableUntilPick: safeUntil,
+            allRosters,
+            userId: sleeperId,
+            ourPositionalNeed,
+          }),
         ]);
       }
     }
@@ -674,6 +701,11 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
       tradeDown,
       context: {
         myNextPickNumber,
+        myNextPickLabel: (() => {
+          const round = Math.ceil(myNextPickNumber / totalRosters);
+          const slot  = ((myNextPickNumber - 1) % totalRosters) + 1;
+          return `${round}.${String(slot).padStart(2, '0')}`;
+        })(),
         targetExpectedPick,
       },
     });
