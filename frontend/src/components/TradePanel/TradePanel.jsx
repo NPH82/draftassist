@@ -257,59 +257,6 @@ function TradeDownCard({ suggestion, myPickLabel }) {
   );
 }
 
-  return (
-    <div style={{ background: 'var(--bg-primary)', borderRadius: 8, marginBottom: '0.6rem', border: `1px solid ${safeZone ? 'var(--yellow)' : 'var(--border)'}`, overflow: 'hidden', opacity: exploratory ? 0.85 : 1 }}>
-      <button
-        onClick={() => setExpanded(e => !e)}
-        style={{ width: '100%', textAlign: 'left', padding: '0.6rem 0.75rem', background: 'transparent', border: 'none', cursor: 'pointer' }}
-      >
-        <div className="flex justify-between items-center">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-              {targetManager?.username || 'Unknown Manager'}
-            </span>
-            {safeZone && <span style={{ fontSize: '0.65rem', background: 'var(--yellow)', color: '#000', borderRadius: 4, padding: '0.1rem 0.35rem', fontWeight: 700 }}>SAFE</span>}
-            {exploratory && <span style={{ fontSize: '0.65rem', background: 'var(--border)', color: 'var(--text-muted)', borderRadius: 4, padding: '0.1rem 0.35rem' }}>RISKY</span>}
-          </div>
-          <span style={{ fontSize: '0.72rem', color: 'var(--yellow)' }}>{expanded ? '▲' : '▼'}</span>
-        </div>
-
-        {pickComparison && (
-          <PickValueBar
-            ourPick={pickComparison.ourPick}
-            theirPick={pickComparison.theirPick}
-            direction="down"
-          />
-        )}
-
-        {pickComparison?.rawSurplus > 0 && (
-          <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-            Your surplus:{' '}
-            <strong style={{ color: 'var(--green)' }}>
-              {pickComparison.rawSurplus.toFixed(1)} FP
-            </strong>
-            {' '}· asking back (88%):{' '}
-            <strong style={{ color: 'var(--green)' }}>
-              ~{pickComparison.requestBack.toFixed(1)} FP
-            </strong>
-          </div>
-        )}
-      </button>
-
-      {expanded && packages.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--border)', padding: '0.6rem 0.75rem' }}>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Package Options
-          </div>
-          {packages.map((pkg, i) => (
-            <PackageOption key={i} pkg={pkg} direction="down" />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ── Pick value comparison bar ────────────────────────────────────────────── */
 function PickValueBar({ ourPick, theirPick, direction }) {
   const ourFp  = ourPick.fpValue   || 0;
