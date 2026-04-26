@@ -27,6 +27,10 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **Win Window labels** confirmed as: Rebuilding (score 0–24), Transitioning (25–49), Contending (50–74), Win Now (75–100) -- based on avg roster age, KTC value, established-starter ratio, and future-picks penalty
 - **Render free tier note**: instances spin down after 15 min; first request after sleep takes ~30s. `FRONTEND_URL` env var must be set to the Vercel URL to pass CORS. `MONGODB_URI` must be set manually (not synced from render.yaml). Atlas Network Access must allow `0.0.0.0/0` due to Render's dynamic IPs.
 - **Seed data**: 48 2025 rookies pre-loaded in `backend/data/rookieSeed.json` as starting point; scrapers merge live data on top once source sites publish post-draft dynasty rankings (typically within days of the NFL Draft)
+- **Mongoose deprecation fixes**: All `findOneAndUpdate` calls updated from `{ new: true }` → `{ returnDocument: 'after' }` across `auth.js`, `leagues.js`, and `learningEngine.js` (×2) -- committed `08a0e17`
+- **2026 rookie class seeded**: `backend/data/rookieSeed2026.json` added with the dynasty Top 48 age/opportunity-adjusted SF rookie board (Carnell Tate #1 overall). Startup guard updated from a global `count === 0` check to a year-specific `countDocuments({ nflDraftYear: 2026 }) === 0` so new draft-year classes seed alongside existing data without wiping the DB -- committed `1a31815`
+- **`POST /api/admin/seed-rookies/:year`** endpoint added: manually seeds a draft class from `rookieSeed{year}.json` if the year is not yet in the DB; skips with a message if already seeded. Dashboard now has a **Seed 2026 Rookie Class** button
+- **Sleeper player ID sync**: `POST /api/admin/sync-sleeper-ids` endpoint added -- fetches the full Sleeper `/players/nfl` player map (~8,000 players) and back-fills any missing `sleeperId` values on Player documents using name+position matching (handles `Jr.`/`Sr.`/`II`/`III`/`IV` suffix variants). Dashboard now has a **Sync Sleeper Player IDs** button. This ensures scraper data (FantasyPros/KTC value updates) matches to the correct player documents -- committed `71da687`
 
 ---
 
@@ -145,6 +149,8 @@ A proprietary numeric score displayed on every player card. Calculated from posi
 ## Initial Rankings Seed
 
 The starting dynasty board is seeded from a Claude-generated Top 48 dynasty rookie list (age/opportunity-adjusted, SuperFlex format, depth-chart-corrected) and cross-referenced against FantasyPros and KTC. The final blended board also applies the app's own Draft Assistant Score criteria, producing a ranking that is intentionally distinct from generic public boards.
+
+**2026 class seed file:** `backend/data/rookieSeed2026.json` — 48 players, ranked by dynasty value (Carnell Tate WR/TEN #1, Jeremiyah Love RB/ARI #2, Fernando Mendoza QB/LV #3). Fields include `nflDraftYear`, `nflDraftRound`, `nflDraftPick`, `age`, `college`, `ktcValue`, and `fantasyProsRank`. Seeded on startup if no 2026 players exist in the DB; can also be triggered via `POST /api/admin/seed-rookies/2026`.
 
 ---
 
