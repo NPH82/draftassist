@@ -50,6 +50,11 @@ function ManagerCard({ p, showWinWindow }) {
           <span className="text-xs text-muted">
             {p.draftsObserved} draft{p.draftsObserved !== 1 ? 's' : ''} · {p.totalPicksObserved} picks
           </span>
+          {Array.isArray(p.seasonsObserved) && p.seasonsObserved.length > 0 && (
+            <div className="text-xs text-muted" style={{ marginTop: '0.05rem' }}>
+              Seasons: {[...p.seasonsObserved].sort((a, b) => b - a).join(', ')}
+            </div>
+          )}
           <div className="text-xs" style={{ marginTop: '0.05rem' }}>
             <span className="text-muted">Draft quality: </span>
             <span className={DRAFT_QUALITY_COLOR[p.draftQualityTier || 'unknown'] || 'text-muted'}>

@@ -47,6 +47,8 @@ const managerProfileSchema = new mongoose.Schema({
 
   // Draft history references
   draftsObserved: [String],  // Sleeper draft IDs
+  seasonsObserved: [Number], // NFL seasons where draft behavior was observed
+  leaguesObserved: [String], // Sleeper league IDs used for learning
   totalPicksObserved: { type: Number, default: 0 },
 
   // Human-readable scouting note (generated)

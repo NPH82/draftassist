@@ -105,9 +105,11 @@ function marketRankSignal(player = {}, fallbackRank = 999) {
 function reachPenaltyFromMarket({ player, currentPick, needTier = 'low', availabilityProb = null, reachDiscipline = 1, fallbackRank = 999 }) {
   const marketRank = marketRankSignal(player, fallbackRank);
   const gap = marketRank - currentPick; // positive means likely available later
-  if (gap <= 4) return { penalty: 0, marketRank, gap };
+  const earlyPick = currentPick <= 12;
+  const threshold = earlyPick ? 2 : 4;
+  if (gap <= threshold) return { penalty: 0, marketRank, gap };
 
-  let penalty = Math.min(24, (gap - 4) * 1.35);
+  let penalty = Math.min(earlyPick ? 34 : 24, (gap - threshold) * (earlyPick ? 2.05 : 1.35));
 
   // Preserve need-based flexibility.
   if (needTier === 'high') penalty *= 0.55;
@@ -373,7 +375,10 @@ router.get('/:draftId', requireAuth, async (req, res) => {
         const personal = calcPersonalRankScore(p.personalRank);
         const base = personal != null ? (p.dasScore || 0) * 0.4 + personal * 0.6 : (p.dasScore || 0);
         const fit = scoreDraftFit(p, rosterComposition, teamContext);
-        const recScore = base + fit - penalty;
+        const needBonus = (positionalNeeds[p.position] || 'low') === 'high'
+          ? 12
+          : (positionalNeeds[p.position] || 'low') === 'medium' ? 5 : 0;
+        const recScore = base + fit + needBonus - penalty;
         return {
           ...p,
           availabilityProb,
@@ -403,7 +408,8 @@ router.get('/:draftId', requireAuth, async (req, res) => {
         const personal = calcPersonalRankScore(p.personalRank);
         const base = personal != null ? (p.dasScore || 0) * 0.4 + personal * 0.6 : (p.dasScore || 0);
         const fit = scoreDraftFit(p, rosterComposition, teamContext);
-        const recScore = base + fit - penalty;
+        const needBonus = needTier === 'high' ? 12 : needTier === 'medium' ? 5 : 0;
+        const recScore = base + fit + needBonus - penalty;
         return {
           ...p,
           availabilityProb,
@@ -415,10 +421,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
           recScore,
           tradeBackCandidate: gap >= 8 && (availabilityProb == null || availabilityProb >= 0.6),
         };
-      }).sort((a, b) => {
-        if (a.needOrder !== b.needOrder) return a.needOrder - b.needOrder;
-        return (b.recScore || 0) - (a.recScore || 0);
-      });
+      }).sort((a, b) => (b.recScore || 0) - (a.recScore || 0));
     }
 
     // Availability predictions

@@ -157,6 +157,30 @@ function PickTargetCard({ pick, leagueId, draftId, onFeedbackSaved }) {
             Recommended target
           </div>
           <PlayerRow player={pick.recommendation} />
+
+          {pick.strategyHint && (
+            <div
+              style={{
+                marginTop: '0.45rem',
+                padding: '0.45rem 0.55rem',
+                borderRadius: 8,
+                border: '1px solid #7f1d1d55',
+                background: '#7f1d1d1f',
+              }}
+            >
+              <div className="text-xs font-semibold" style={{ color: '#fda4af', marginBottom: '0.15rem' }}>
+                Trade Back / Pivot Alert
+              </div>
+              <div className="text-xs text-secondary" style={{ marginBottom: '0.25rem' }}>
+                {pick.strategyHint.message}
+              </div>
+              {pick.strategyHint.marketRank != null && (
+                <div className="text-xs text-muted">
+                  Market rank ~#{pick.strategyHint.marketRank} · Reach gap {pick.strategyHint.reachGap || 0}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <div className="text-sm text-secondary">No player data available for this pick yet.</div>

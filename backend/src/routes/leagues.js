@@ -107,9 +107,11 @@ function marketRankSignal(player = {}, fallbackRank = 999) {
 function reachPenaltyFromMarket({ player, currentPick, needTier = 'low', reachDiscipline = 1, fallbackRank = 999 }) {
   const marketRank = marketRankSignal(player, fallbackRank);
   const gap = marketRank - currentPick; // positive means likely available after current slot
-  if (gap <= 4) return { penalty: 0, marketRank, gap };
+  const earlyPick = currentPick <= 12;
+  const threshold = earlyPick ? 2 : 4;
+  if (gap <= threshold) return { penalty: 0, marketRank, gap };
 
-  let penalty = Math.min(24, (gap - 4) * 1.35);
+  let penalty = Math.min(earlyPick ? 34 : 24, (gap - threshold) * (earlyPick ? 2.05 : 1.35));
 
   // Preserve need-based flexibility.
   if (needTier === 'high') penalty *= 0.55;
@@ -488,7 +490,8 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
         const personal = calcPersonalRankScore(p.personalRank);
         const base = personal != null ? (p.dasScore || 0) * 0.4 + personal * 0.6 : (p.dasScore || 0);
         const fit = scoreDraftFit(p, rosterComposition, teamContext);
-        const recScore = base + fit - penalty;
+        const needBonus = needTier === 'high' ? 12 : needTier === 'medium' ? 5 : 0;
+        const recScore = base + fit + needBonus - penalty;
 
         return {
           ...p,
@@ -502,9 +505,8 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
         };
       });
 
-      // Primary sort: positional need then reach-aware recommendation score.
+      // Primary sort: blended score (need bonus included) so severe reaches can still be faded.
       const byTeamNeed = scored.slice().sort((a, b) => {
-        if (a.needValue !== b.needValue) return a.needValue - b.needValue;
         return (b.recScore || 0) - (a.recScore || 0);
       });
 

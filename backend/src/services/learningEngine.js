@@ -8,7 +8,7 @@ const ManagerProfile = require('../models/ManagerProfile');
 const Player = require('../models/Player');
 const sleeperService = require('./sleeperService');
 
-const LOOKBACK_YEARS = 4;
+const LOOKBACK_YEARS = 6;
 
 /**
  * Build a map of rosterId -> { userId, username } for a league.
@@ -116,7 +116,7 @@ function evaluateDraftQuality(picks = [], playerValueMap = {}) {
  * @param {object[]} picks - array of pick objects from Sleeper
  * @param {object} rosterUserMap - { rosterId: { userId, username } }
  */
-async function ingestDraft(draftId, picks, rosterUserMap = {}) {
+async function ingestDraft(draftId, picks, rosterUserMap = {}, meta = {}) {
   if (!picks || picks.length === 0) return;
 
   const pickPlayerIds = [...new Set(picks.map(p => p.player_id).filter(Boolean))];
@@ -138,14 +138,14 @@ async function ingestDraft(draftId, picks, rosterUserMap = {}) {
   let managersUpdated = 0;
   for (const [rosterId, mPicks] of Object.entries(managerPicks)) {
     const owner = rosterUserMap[rosterId] || { userId: rosterId, username: null };
-    const changed = await updateManagerProfile(owner.userId, owner.username, mPicks, draftId, playerValueMap);
+    const changed = await updateManagerProfile(owner.userId, owner.username, mPicks, draftId, playerValueMap, meta);
     if (changed) managersUpdated++;
   }
 
   return managersUpdated;
 }
 
-async function updateManagerProfile(sleeperId, username, picks, draftId, playerValueMap = {}) {
+async function updateManagerProfile(sleeperId, username, picks, draftId, playerValueMap = {}, meta = {}) {
   const profile = await ManagerProfile.findOneAndUpdate(
     { sleeperId },
     { $setOnInsert: { sleeperId } },
@@ -154,7 +154,24 @@ async function updateManagerProfile(sleeperId, username, picks, draftId, playerV
 
   // If draft was already observed, only backfill quality metrics when missing.
   const alreadyObserved = profile.draftsObserved?.includes(draftId);
-  if (alreadyObserved && profile.draftQualityTier && profile.draftQualityTier !== 'unknown') return false;
+  const season = Number.isFinite(meta?.season) ? meta.season : null;
+  const leagueId = meta?.leagueId || null;
+  const seasonMissing = season != null && !(profile.seasonsObserved || []).includes(season);
+  const leagueMissing = leagueId && !(profile.leaguesObserved || []).includes(leagueId);
+
+  if (alreadyObserved && profile.draftQualityTier && profile.draftQualityTier !== 'unknown') {
+    if (seasonMissing || leagueMissing) {
+      const addToSet = {};
+      if (seasonMissing) addToSet.seasonsObserved = season;
+      if (leagueMissing) addToSet.leaguesObserved = leagueId;
+      await ManagerProfile.findOneAndUpdate(
+        { sleeperId },
+        { $addToSet: addToSet, lastUpdated: new Date() }
+      );
+      return true;
+    }
+    return false;
+  }
 
   const posCount = { QB: 0, RB: 0, WR: 0, TE: 0 };
   const earlyPosCount = { QB: 0, RB: 0, WR: 0, TE: 0 };
@@ -233,6 +250,11 @@ async function updateManagerProfile(sleeperId, username, picks, draftId, playerV
     };
     if (username) backfillUpdate.username = username;
 
+    const addToSet = {};
+    if (season != null) addToSet.seasonsObserved = season;
+    if (leagueId) addToSet.leaguesObserved = leagueId;
+    if (Object.keys(addToSet).length > 0) backfillUpdate.$addToSet = addToSet;
+
     await ManagerProfile.findOneAndUpdate({ sleeperId }, backfillUpdate);
     return true;
   }
@@ -242,6 +264,10 @@ async function updateManagerProfile(sleeperId, username, picks, draftId, playerV
     valueOverExpected: blendedVoe,
     hitRate: blendedHitRate,
   });
+
+  const addToSet = { draftsObserved: draftId };
+  if (season != null) addToSet.seasonsObserved = season;
+  if (leagueId) addToSet.leaguesObserved = leagueId;
 
   const update = {
     positionWeights: newPosWeights,
@@ -254,7 +280,7 @@ async function updateManagerProfile(sleeperId, username, picks, draftId, playerV
     draftHitRate: Number(blendedHitRate.toFixed(3)),
     draftQualityTier: qualityTier,
     scoutingNotes: notes,
-    $addToSet: { draftsObserved: draftId },
+    $addToSet: addToSet,
     $inc: { totalPicksObserved: totalPicks },
     lastUpdated: new Date(),
   };
@@ -376,6 +402,8 @@ async function learnFromUserLeagues(userId, leagueIds) {
   }
 
   // Process all collected leagues
+  summary.leaguesScanned = allLeagueIds.size;
+  summary.lookbackSeasons = lookbackSeasons;
   for (const leagueId of allLeagueIds) {
     try {
       const [drafts, rosterUserMap] = await Promise.all([
@@ -386,7 +414,10 @@ async function learnFromUserLeagues(userId, leagueIds) {
       for (const draft of drafts) {
         if (draft.status !== 'complete') continue;
         const picks = await sleeperService.getDraftPicks(draft.draft_id);
-        const changedManagers = await ingestDraft(draft.draft_id, picks, rosterUserMap);
+        const changedManagers = await ingestDraft(draft.draft_id, picks, rosterUserMap, {
+          season: Number.parseInt(draft.season, 10),
+          leagueId,
+        });
         if (changedManagers > 0) summary.draftsProcessed++;
         else summary.draftsSkipped++;
 
