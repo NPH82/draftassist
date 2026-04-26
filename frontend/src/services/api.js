@@ -44,5 +44,6 @@ export const refreshDepthCharts = () => api.post('/admin/refresh/depth-charts').
 export const triggerLearn = () => api.post('/admin/learn').then(r => r.data);
 export const getManagerProfiles = () => api.get('/admin/manager-profiles').then(r => r.data);
 export const seedRookies = (year) => api.post(`/admin/seed-rookies/${year}`).then(r => r.data);
+export const syncSleeperIds = () => api.post('/admin/sync-sleeper-ids').then(r => r.data);
 
 export default api;

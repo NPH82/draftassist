@@ -168,4 +168,55 @@ router.post('/seed-rookies/:year', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/admin/sync-sleeper-ids -- fetch Sleeper player DB and back-fill sleeperId on our players
+router.post('/sync-sleeper-ids', requireAuth, async (req, res) => {
+  try {
+    const { getAllPlayers } = require('../services/sleeperService');
+    // Fetch all ~8000 NFL players from Sleeper (large payload -- ~2 MB)
+    const sleeperMap = await getAllPlayers('nfl');
+
+    // Build lookup: normalised "full_name|POSITION" -> sleeperId
+    const lookup = {};
+    for (const [id, p] of Object.entries(sleeperMap)) {
+      if (!p.full_name || !p.position) continue;
+      const key = `${p.full_name.toLowerCase().trim()}|${p.position.toUpperCase()}`;
+      lookup[key] = id;
+      // Also index first_last without suffix (handles "Jr." mismatches)
+      const bare = p.full_name.toLowerCase().replace(/\s+(jr\.?|sr\.?|ii|iii|iv)$/i, '').trim();
+      if (bare !== p.full_name.toLowerCase().trim()) {
+        lookup[`${bare}|${p.position.toUpperCase()}`] = id;
+      }
+    }
+
+    // Find players in our DB that are missing a sleeperId
+    const players = await Player.find({ $or: [{ sleeperId: null }, { sleeperId: '' }, { sleeperId: { $exists: false } }] }).lean();
+
+    let updated = 0;
+    let notFound = 0;
+    const missed = [];
+
+    for (const player of players) {
+      const key = `${player.name.toLowerCase().trim()}|${player.position.toUpperCase()}`;
+      const bare = player.name.toLowerCase().replace(/\s+(jr\.?|sr\.?|ii|iii|iv)$/i, '').trim() + `|${player.position.toUpperCase()}`;
+      const sid = lookup[key] || lookup[bare];
+      if (sid) {
+        await Player.updateOne({ _id: player._id }, { sleeperId: sid });
+        updated++;
+      } else {
+        notFound++;
+        missed.push(`${player.name} (${player.position})`);
+      }
+    }
+
+    res.json({
+      message: `Synced Sleeper IDs: ${updated} updated, ${notFound} not matched`,
+      updated,
+      notFound,
+      unmatched: missed.slice(0, 20), // first 20 for debug
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

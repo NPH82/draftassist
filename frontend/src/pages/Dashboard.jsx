@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, triggerLearn, seedRookies } from '../services/api';
+import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, triggerLearn, seedRookies, syncSleeperIds } from '../services/api';
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
@@ -20,6 +20,8 @@ export default function Dashboard() {
   const [learnMsg, setLearnMsg] = useState(null);
   const [seeding, setSeeding] = useState(false);
   const [seedMsg, setSeedMsg] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
   useEffect(() => {
     getActiveDrafts()
@@ -41,6 +43,19 @@ export default function Dashboard() {
       setRefreshMsg('Refresh failed -- check Render logs');
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleSyncSleeperIds = async () => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await syncSleeperIds();
+      setSyncMsg(res.message);
+    } catch (err) {
+      setSyncMsg(err?.response?.data?.error || 'Sync failed');
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -216,6 +231,22 @@ export default function Dashboard() {
             </button>
             <div className="text-xs text-muted">
               Adds 2026 NFL Draft dynasty Top 48 to the player database (skips if already seeded).
+            </div>
+
+            {syncMsg && (
+              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
+                {syncMsg}
+              </div>
+            )}
+            <button
+              className="btn btn-secondary text-sm"
+              onClick={handleSyncSleeperIds}
+              disabled={syncing}
+            >
+              {syncing ? 'Syncing Sleeper IDs...' : 'Sync Sleeper Player IDs'}
+            </button>
+            <div className="text-xs text-muted">
+              Fetches the Sleeper player database and back-fills missing player IDs so scraper data matches correctly.
             </div>
           </div>
         </section>
