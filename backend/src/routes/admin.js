@@ -139,4 +139,33 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/admin/seed-rookies/:year -- seed a draft class if not already in DB
+router.post('/seed-rookies/:year', requireAuth, async (req, res) => {
+  const year = parseInt(req.params.year, 10);
+  if (isNaN(year) || year < 2020 || year > 2030) {
+    return res.status(400).json({ error: 'Invalid year' });
+  }
+  try {
+    const existing = await Player.countDocuments({ nflDraftYear: year });
+    if (existing > 0) {
+      return res.json({ message: `${year} class already seeded (${existing} players found)`, seeded: 0 });
+    }
+    const { calculateDAS } = require('../services/scoringEngine');
+    const seed = require(`../../data/rookieSeed${year}.json`);
+    let count = 0;
+    for (const p of seed) {
+      const { score, breakdown } = calculateDAS(p);
+      await Player.findOneAndUpdate(
+        { name: p.name, position: p.position },
+        { ...p, dasScore: score, dasBreakdown: breakdown, dataSource: 'seed' },
+        { upsert: true }
+      );
+      count++;
+    }
+    res.json({ message: `Seeded ${count} players from ${year} class`, seeded: count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

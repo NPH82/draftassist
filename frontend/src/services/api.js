@@ -43,5 +43,6 @@ export const refreshRankings = () => api.post('/admin/refresh/rankings').then(r 
 export const refreshDepthCharts = () => api.post('/admin/refresh/depth-charts').then(r => r.data);
 export const triggerLearn = () => api.post('/admin/learn').then(r => r.data);
 export const getManagerProfiles = () => api.get('/admin/manager-profiles').then(r => r.data);
+export const seedRookies = (year) => api.post(`/admin/seed-rookies/${year}`).then(r => r.data);
 
 export default api;

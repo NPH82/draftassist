@@ -12,12 +12,11 @@ async function start() {
 
   // Seed player data on first start if DB is empty
   const Player = require('./models/Player');
-  const count = await Player.countDocuments();
-  if (count === 0) {
-    console.log('[Server] No players in DB -- seeding from seed data...');
+  const { calculateDAS } = require('./services/scoringEngine');
+
+  const seedFile = async (filename, label) => {
     try {
-      const seed = require('../data/rookieSeed.json');
-      const { calculateDAS } = require('./services/scoringEngine');
+      const seed = require(`../data/${filename}`);
       for (const p of seed) {
         const { score, breakdown } = calculateDAS(p);
         await Player.findOneAndUpdate(
@@ -26,10 +25,22 @@ async function start() {
           { upsert: true }
         );
       }
-      console.log(`[Server] Seeded ${seed.length} players`);
+      console.log(`[Server] Seeded ${seed.length} ${label} players`);
     } catch (err) {
-      console.warn('[Server] Seed file not found or failed:', err.message);
+      console.warn(`[Server] Seed file ${filename} failed:`, err.message);
     }
+  };
+
+  const count = await Player.countDocuments();
+  if (count === 0) {
+    console.log('[Server] No players in DB -- seeding 2025 class...');
+    await seedFile('rookieSeed.json', '2025');
+  }
+
+  const count2026 = await Player.countDocuments({ nflDraftYear: 2026 });
+  if (count2026 === 0) {
+    console.log('[Server] No 2026 players found -- seeding 2026 class...');
+    await seedFile('rookieSeed2026.json', '2026');
   }
 
   startScheduler();

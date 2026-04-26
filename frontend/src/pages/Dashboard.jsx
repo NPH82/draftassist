@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, triggerLearn } from '../services/api';
+import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, triggerLearn, seedRookies } from '../services/api';
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
@@ -18,6 +18,8 @@ export default function Dashboard() {
   const [managerProfiles, setManagerProfiles] = useState(null);
   const [learning, setLearning] = useState(false);
   const [learnMsg, setLearnMsg] = useState(null);
+  const [seeding, setSeeding] = useState(false);
+  const [seedMsg, setSeedMsg] = useState(null);
 
   useEffect(() => {
     getActiveDrafts()
@@ -39,6 +41,19 @@ export default function Dashboard() {
       setRefreshMsg('Refresh failed -- check Render logs');
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleSeedRookies = async (year) => {
+    setSeeding(true);
+    setSeedMsg(null);
+    try {
+      const res = await seedRookies(year);
+      setSeedMsg(res.message);
+    } catch (err) {
+      setSeedMsg(err?.response?.data?.error || 'Seed failed');
+    } finally {
+      setSeeding(false);
     }
   };
 
@@ -185,6 +200,22 @@ export default function Dashboard() {
             </button>
             <div className="text-xs text-muted">
               Scrapes FantasyPros, KTC, and Underdog. Data updates ~60s after triggering. Runs automatically daily at 3am UTC.
+            </div>
+
+            {seedMsg && (
+              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
+                {seedMsg}
+              </div>
+            )}
+            <button
+              className="btn btn-secondary text-sm"
+              onClick={() => handleSeedRookies(2026)}
+              disabled={seeding}
+            >
+              {seeding ? 'Seeding...' : 'Seed 2026 Rookie Class'}
+            </button>
+            <div className="text-xs text-muted">
+              Adds 2026 NFL Draft dynasty Top 48 to the player database (skips if already seeded).
             </div>
           </div>
         </section>
