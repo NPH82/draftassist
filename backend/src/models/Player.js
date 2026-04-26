@@ -38,9 +38,13 @@ const playerSchema = new mongoose.Schema({
   currentInjuryStatus: { type: String, default: 'Active' },  // from Sleeper
 
   // Production stats (position-specific)
-  yprr: Number,               // WR: yards per route run
+  yprr: Number,               // WR: NFL yards per route run (veterans)
+  collegeYprr: Number,        // WR/TE: college yards per route run (PFF college; primary for rookies)
+  collegeYardsPerRec: Number, // WR/TE: college yards per reception (proxy when YPRR unavailable)
   collegeReceptions: Number,  // RB: career single-season max receptions
-  targetShare: Number,        // RB/TE: target share percentage
+  collegeRushYpc: Number,     // RB: college yards per carry
+  collegeTDs: Number,         // all: career college touchdowns
+  targetShare: Number,        // RB/TE: NFL target share percentage (veterans)
 
   // External rankings/values
   fantasyProsValue: Number,

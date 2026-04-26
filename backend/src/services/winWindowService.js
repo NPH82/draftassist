@@ -93,8 +93,11 @@ function analyzePositionalNeeds(rosterPlayerIds, playerMap, rosterPositions = []
     if (p && counts[p.position] !== undefined) counts[p.position]++;
   }
 
-  // Typical dynasty target counts by position
-  const targets = { QB: 2, RB: 5, WR: 6, TE: 2 };
+  // In SuperFlex leagues (SUPER_FLEX slot present) QBs are started 2x so target 2;
+  // in standard leagues only 1 QB is started so 1 rostered is sufficient.
+  const isSuperFlex = Array.isArray(rosterPositions) &&
+    rosterPositions.some(pos => typeof pos === 'string' && pos.toUpperCase() === 'SUPER_FLEX');
+  const targets = { QB: isSuperFlex ? 2 : 1, RB: 5, WR: 6, TE: 2 };
   const needs = {};
   for (const pos of Object.keys(targets)) {
     const ratio = counts[pos] / targets[pos];

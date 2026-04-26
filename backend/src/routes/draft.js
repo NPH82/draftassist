@@ -113,8 +113,11 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       : 999;
     const myNextPickNumber = picksMade + picksUntilMe + 1;
 
-    // Load all players
-    const allPlayers = await Player.find({}).sort({ dasScore: -1 }).lean();
+    // Load players — rookie drafts (rounds < totalRosters) show only current draft class
+    const draftSeason = parseInt(draftData.season) || new Date().getFullYear();
+    const isRookieDraft = (draftData.settings?.rounds || 5) < totalRosters;
+    const playerFilter = isRookieDraft ? { nflDraftYear: draftSeason } : {};
+    const allPlayers = await Player.find(playerFilter).sort({ dasScore: -1 }).lean();
     const availablePlayers = allPlayers
       .filter(p => !p.sleeperId || !draftedIds.has(p.sleeperId))
       .map((p, i) => ({ ...p, dasRank: i + 1, valueGap: detectValueGap(p) }));

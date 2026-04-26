@@ -39,6 +39,10 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **Automated startup sequence** (`server.js`): (1) seed 2025 rookies if DB empty, (2) seed 2026 rookies if none present, (3) import all Sleeper skill-position players if DB has fewer than 500 total, (4) sync `sleeperId` for any unmatched players, (5) start scheduler
 - **Weekly Sleeper sync job** added to `scheduler.js`: runs every Sunday at 2am -- re-imports to refresh team/age/injury and back-fills any new ID gaps
 - **`POST /api/admin/load-player-data`** endpoint wired up: triggers the one-time deep-load scrapers (PFR combine stats, ESPN draft results, RotoWire college injuries) on demand. Previously `loadPlayerData()` was exported from `scrapers/index.js` but not reachable via any route
+- **College stats fields added to Player model**: `collegeYprr`, `collegeYardsPerRec`, `collegeReceptions`, `collegeRushYpc`, `collegeTDs` fields added to the Player schema. These are the primary DAS inputs for rookies when NFL production data is unavailable. `collegeYprr` (PFF college) is preferred; `collegeYardsPerRec` (PFR-scraped) is the proxy fallback
+- **PFR scraper expanded with college stats**: `pfrScraper.js` now exports `fetchCollegeReceivingStats(year)` and `fetchCollegeRushingStats(year)` in addition to combine data. Sources: sports-reference.com/cfb play-index (receiving: YPR, rec, recYds, TDs; rushing: YPC, rushAtt, rushYds). Filtered to players with 50+ targets / 50+ rush attempts to reduce noise
+- **Scoring engine updated for college data**: `scoringEngine.js` rookies (no NFL stats) now use `collegeYprr` → `collegeYardsPerRec` → draft capital fallback chain for WR/TE production score. RBs use `collegeRushYpc` + `collegeReceptions` (20+ is a strong pass-game signal). QBs unchanged (draft capital + conference strength remain primary). SuperFlex QB need detection confirmed correct
+- **`loadPlayerData()` now persists scraped data**: Previously the function called scrapers but discarded the results. Now it fetches combine (`fetchCombineData`), college receiving (`fetchCollegeReceivingStats`), and college rushing (`fetchCollegeRushingStats`) in parallel, then upserts `athletics.fortyTime`, `athletics.verticalJump`, `collegeYardsPerRec`, `collegeTDs`, `collegeReceptions`, and `collegeRushYpc` onto all Player documents where `nflDraftYear >= 2025`. Matching is by `player.name` (case-insensitive)
 
 ---
 
@@ -195,7 +199,7 @@ winWindowService.analyzePositionalNeeds() → positional need gaps
 | [KeepTradeCut](https://keeptradecut.com/dynasty-rankings) | Dynasty trade values | Daily |
 | [Underdog ADP](https://underdogfantasy.com/) | Average draft position | Daily |
 | [OurLads](https://www.ourlads.com/nfldepthcharts/) | NFL depth charts (scrape) | Weekly |
-| [Pro Football Reference](https://www.pro-football-reference.com/) | College stats, combine data, NFL injury history (scrape) | On player data load |
+| [Pro Football Reference](https://www.pro-football-reference.com/) | Combine metrics (40 time, vertical, broad jump), NFL injury history; college receiving/rushing stats via sports-reference.com/cfb (scrape) | On player data load |
 | [ESPN](https://www.espn.com/nfl/draft/rounds) | 2026 NFL Draft results (scrape) | On load / as needed |
 | [RotoWire](https://www.rotowire.com/cfootball/news.php?view=injuries) | College injury history (scrape) | On player data load |
 | [Sleeper Player Endpoint](https://docs.sleeper.com/) | Current NFL injury status for rostered veterans | Daily |
@@ -221,13 +225,12 @@ A proprietary numeric score displayed on every player card. Calculated from posi
 - Age / dynasty runway (penalizes older players; RBs penalized most aggressively approaching age 27)
 
 **WR-specific weights:**
-- YPRR (primary metric)
+- YPRR (primary metric for veterans); for rookies: `collegeYprr` → `collegeYardsPerRec` (PFR-scraped) → draft capital fallback
 - Target competition on landing NFL team
 - Depth chart opportunity
 
 **RB-specific weights:**
-- Target share / pass-catching role
-- College reception count (20+ in a season is a strong positive signal)
+- Target share / pass-catching role (veterans); for rookies: `collegeRushYpc` + `collegeReceptions` (20+ single season = strong pass-game signal)
 - Age (most heavily penalized position for age)
 
 **QB-specific weights:**

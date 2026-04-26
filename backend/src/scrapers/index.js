@@ -101,12 +101,48 @@ async function refreshDepthCharts() {
 
 // One-time player data load (PFR + RotoWire + ESPN draft results)
 async function loadPlayerData() {
-  const [pfr, espn, roto] = await Promise.all([
-    runScraper('PFR', pfrScraper.fetchCombineAndCollegeStats),
+  // Fetch all data
+  const [combine, receiving, rushing, espn, roto] = await Promise.all([
+    runScraper('Combine', () => pfrScraper.fetchCombineData()),
+    runScraper('CollegeReceiving', () => pfrScraper.fetchCollegeReceivingStats()),
+    runScraper('CollegeRushing', () => pfrScraper.fetchCollegeRushingStats()),
     runScraper('ESPN', espnScraper.fetchDraftResults),
     runScraper('RotoWire', rotowireScraper.fetchCollegeInjuries),
   ]);
-  return { pfr: pfr.ok, espn: espn.ok, roto: roto.ok };
+
+  // Index by name for matching
+  const combineMap = Object.fromEntries((combine.data || []).map(p => [p.name.toLowerCase(), p]));
+  const recMap = Object.fromEntries((receiving.data || []).map(p => [p.name.toLowerCase(), p]));
+  const rushMap = Object.fromEntries((rushing.data || []).map(p => [p.name.toLowerCase(), p]));
+
+  // Update all rookies in DB with new data
+  const rookies = await Player.find({ nflDraftYear: { $gte: 2025 } });
+  for (const player of rookies) {
+    const nameKey = player.name.toLowerCase();
+    const combine = combineMap[nameKey];
+    const rec = recMap[nameKey];
+    const rush = rushMap[nameKey];
+
+    const update = {};
+    if (combine) {
+      update["athletics.fortyTime"] = combine.fortyTime;
+      update["athletics.verticalJump"] = combine.verticalJump;
+      // broadJump could be added if modeled
+    }
+    if (rec) {
+      update.collegeYardsPerRec = rec.collegeYardsPerRec;
+      update.collegeTDs = rec.collegeTDs;
+      update.collegeReceptions = rec.rec;
+    }
+    if (rush) {
+      update.collegeRushYpc = rush.collegeRushYpc;
+    }
+    if (Object.keys(update).length > 0) {
+      await Player.updateOne({ _id: player._id }, { $set: update });
+    }
+  }
+
+  return { combine: combine.ok, receiving: receiving.ok, rushing: rushing.ok, espn: espn.ok, roto: roto.ok };
 }
 
 module.exports = { refreshDailyRankings, refreshDepthCharts, loadPlayerData };

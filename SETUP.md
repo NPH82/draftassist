@@ -49,7 +49,38 @@ Health check: http://localhost:4000/health
 
 ## Database Seed
 
-On first startup, if the Player collection is empty, the backend auto-seeds from `backend/data/rookieSeed.json` (48 2025 rookies with initial rankings). To manually force a reseed, drop the `players` collection in MongoDB Atlas and restart the server.
+The startup sequence runs automatically on every server start:
+1. Seeds 2025 rookie class from `backend/data/rookieSeed.json` if the DB is empty
+2. Seeds 2026 rookie class from `backend/data/rookieSeed2026.json` if no 2026 players exist
+3. Imports all Sleeper skill-position players (QB/RB/WR/TE) if DB has fewer than 500 players total
+4. Back-fills `sleeperId` for any unmatched players
+
+To manually force a reseed of a specific year, use the admin endpoint:
+```bash
+curl -X POST http://localhost:4000/api/admin/seed-rookies/2026 \
+  -H "Authorization: Bearer <sleeper_user_token>"
+```
+
+---
+
+## Player Data Load (College Stats + Combine)
+
+After initial seed, run the one-time deep load to populate combine metrics and college stats (PFR + ESPN + RotoWire). This enriches rookie player cards with athletic testing and college production data used by the Draft Assistant Score.
+
+```bash
+curl -X POST http://localhost:4000/api/admin/load-player-data \
+  -H "Authorization: Bearer <sleeper_user_token>"
+```
+
+Or use the **Refresh Player Data** button on the Dashboard.
+
+This scrapes:
+- **PFR combine**: 40 time, vertical jump for the current draft class
+- **PFR college stats**: receiving (YPR, rec, yards, TDs) and rushing (YPC, att, yards) from sports-reference.com/cfb
+- **ESPN**: current-year NFL draft results (round/pick)
+- **RotoWire**: college injury history
+
+Results are upserted onto all Player documents with `nflDraftYear >= 2025`. Safe to re-run.
 
 ---
 
@@ -93,11 +124,14 @@ Note: Free tier Render instances spin down after 15 min of inactivity. The first
 
 ## Scheduled Jobs
 
-The backend runs two cron jobs automatically:
+The backend runs three cron jobs automatically:
 - **Daily 3am UTC**: Scrapes FantasyPros, KTC, and Underdog for updated rankings/ADPs
-- **Monday 4am UTC**: Scrapes OurLabs for NFL depth chart updates
+- **Monday 4am UTC**: Scrapes OurLads for NFL depth chart updates
+- **Sunday 2am UTC**: Re-imports all Sleeper skill-position players (refreshes team/age/injury) and back-fills any new `sleeperId` gaps
 
 Render free tier may miss these jobs if the instance is asleep. Consider upgrading to Starter ($7/month) for always-on instances if consistent data freshness is needed.
+
+All jobs can also be triggered manually from the Dashboard or via admin endpoints under `/api/admin/*`.
 
 ---
 
@@ -110,9 +144,9 @@ Render free tier may miss these jobs if the instance is asleep. Consider upgradi
 | KTC (KeepTradeCut) | Dynasty values | Daily |
 | Underdog | ADP | Daily |
 | OurLabs | NFL depth charts | Weekly |
-| Pro Football Reference | Combine metrics, injuries | On-demand |
-| ESPN | Current injury status | On-demand |
-| RotoWire | Injury news | On-demand |
+| Pro Football Reference | Combine metrics (40 time, vertical); college receiving/rushing stats via sports-reference.com/cfb; NFL injury history | On-demand (`/api/admin/load-player-data`) |
+| ESPN | NFL Draft results (round/pick) | On-demand |
+| RotoWire | College injury history | On-demand |
 
 ---
 

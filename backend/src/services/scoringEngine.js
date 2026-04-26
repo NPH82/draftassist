@@ -89,21 +89,40 @@ function ageRunwayScore(age, position) {
 
 function wrScore(player) {
   let score = 0;
-  // YPRR (primary -- up to 30 pts)
-  const yprr = player.yprr;
-  if (yprr >= 3.0) score += 30;
-  else if (yprr >= 2.5) score += 24;
-  else if (yprr >= 2.0) score += 18;
-  else if (yprr >= 1.5) score += 12;
-  else if (yprr) score += 6;
-  else score += 10; // unknown (rookie, no NFL data yet)
 
-  // Target competition (up to 15 pts) -- lower is better; inverse scale
-  // depthChartPosition: 1=starter, 2=No2 WR, etc.
+  // Receiving quality (primary -- up to 30 pts)
+  // Priority: college YPRR > college yards/rec (proxy) > NFL YPRR > draft capital fallback
+  const yprr = player.collegeYprr || player.yprr;
+  const ypr  = player.collegeYardsPerRec;
+
+  if (yprr) {
+    // YPRR scale: elite dynasty WRs run 2.5+ in college, good is 1.8+
+    if (yprr >= 3.0) score += 30;
+    else if (yprr >= 2.5) score += 25;
+    else if (yprr >= 2.0) score += 19;
+    else if (yprr >= 1.5) score += 13;
+    else score += 7;
+  } else if (ypr) {
+    // College yards per reception proxy (elite ~16+, good ~13+, avg ~10+)
+    if (ypr >= 16) score += 26;
+    else if (ypr >= 14) score += 21;
+    else if (ypr >= 12) score += 15;
+    else if (ypr >= 10) score += 10;
+    else score += 5;
+  } else {
+    // No production data -- draft capital is the best available signal
+    const round = player.nflDraftRound || 7;
+    if (round === 1) score += 18;
+    else if (round === 2) score += 13;
+    else if (round === 3) score += 8;
+    else score += 4;
+  }
+
+  // Target competition / depth chart (up to 15 pts)
   const depth = player.depthChartPosition || 2;
   score += Math.max(0, 15 - (depth - 1) * 5);
 
-  // Draft capital already in universal bucket, but WR gets an extra 15 pts for round 1
+  // Draft capital bonus -- Rd1 WRs have the highest floor (up to 15 pts)
   if (player.nflDraftRound === 1) score += 15;
   else if (player.nflDraftRound === 2) score += 10;
   else if (player.nflDraftRound === 3) score += 6;
@@ -114,24 +133,41 @@ function wrScore(player) {
 
 function rbScore(player) {
   let score = 0;
-  // Pass-catching role (up to 25 pts)
+
+  // Pass-catching role -- college single-season max receptions (up to 20 pts)
   const rec = player.collegeReceptions || 0;
-  if (rec >= 30) score += 25;
-  else if (rec >= 20) score += 18;
-  else if (rec >= 10) score += 10;
-  else score += 3;
+  if (rec >= 30) score += 20;
+  else if (rec >= 20) score += 15;
+  else if (rec >= 10) score += 9;
+  else if (rec > 0) score += 4;
+  else {
+    // No college reception data -- fall back to NFL target share (vets) or capital
+    const ts = player.targetShare || 0;
+    if (ts > 0) score += Math.min(15, ts * 100);
+    else {
+      const round = player.nflDraftRound || 7;
+      if (round === 1) score += 12;
+      else if (round === 2) score += 8;
+      else if (round === 3) score += 4;
+      else score += 2;
+    }
+  }
 
-  // Target share / usage (up to 15 pts)
-  const ts = player.targetShare || 0;
-  score += Math.min(15, ts * 100);
+  // Rushing efficiency -- college yards per carry (up to 15 pts)
+  const ypc = player.collegeRushYpc || 0;
+  if (ypc >= 6.5) score += 15;
+  else if (ypc >= 5.5) score += 11;
+  else if (ypc >= 4.5) score += 7;
+  else if (ypc > 0) score += 3;
+  // 0 if no data -- draft capital in universal bucket carries the load
 
-  // Age (extra penalty on top of universal -- RBs most penalized)
+  // Age runway (up to 25 pts) -- RBs most penalized for age
   const age = player.age || 22;
-  if (age <= 22) score += 20;
+  if (age <= 21) score += 25;
+  else if (age <= 22) score += 21;
   else if (age <= 23) score += 16;
-  else if (age <= 24) score += 12;
-  else if (age <= 25) score += 8;
-  else if (age <= 26) score += 4;
+  else if (age <= 24) score += 11;
+  else if (age <= 25) score += 6;
   else score += 0;
 
   return Math.min(60, score);
@@ -161,8 +197,26 @@ function qbScore(player) {
 
 function teScore(player) {
   let score = 0;
-  // Pass-catcher classification (up to 30 pts)
-  score += player.isPassCatcher ? 30 : 10;
+
+  // Pass-catcher classification (up to 20 pts)
+  score += player.isPassCatcher ? 20 : 8;
+
+  // College receiving quality (up to 10 pts)
+  // Use college YPRR if available, else yards/rec proxy
+  const yprr = player.collegeYprr;
+  const ypr  = player.collegeYardsPerRec;
+  if (yprr) {
+    if (yprr >= 2.5) score += 10;
+    else if (yprr >= 1.8) score += 7;
+    else if (yprr >= 1.2) score += 4;
+    else score += 2;
+  } else if (ypr) {
+    if (ypr >= 14) score += 10;
+    else if (ypr >= 11) score += 7;
+    else if (ypr >= 9)  score += 4;
+    else score += 2;
+  }
+  // No data: 0 bonus (draft capital in universal + below covers it)
 
   // Draft capital (up to 20 pts)
   const round = player.nflDraftRound || 7;

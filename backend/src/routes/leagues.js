@@ -211,8 +211,11 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
     const draftedIds = new Set(picks.map(p => p.player_id).filter(Boolean));
     const picksMade = picks.length;
 
-    // All players sorted by DAS score
-    const allPlayers = await Player.find({}).sort({ dasScore: -1 }).lean();
+    // All players sorted by DAS score — rookie drafts show only current season's draft class
+    const draftSeason = parseInt(draftData.season) || new Date().getFullYear();
+    const isRookieDraft = rounds < totalTeams;
+    const playerFilter = isRookieDraft ? { nflDraftYear: draftSeason } : {};
+    const allPlayers = await Player.find(playerFilter).sort({ dasScore: -1 }).lean();
 
     // Assign an ADP rank to each player (lower = more in-demand)
     const sortedByDemand = allPlayers.slice().sort((a, b) => {

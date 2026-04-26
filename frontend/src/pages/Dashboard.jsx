@@ -165,9 +165,9 @@ export default function Dashboard() {
                 const isExpanded = expandedLeague === lg.leagueId;
                 return (
                   <div key={lg.leagueId}>
-                    <div
+                    <button
                       className="card"
-                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                      style={{ cursor: 'pointer', userSelect: 'none', width: '100%', textAlign: 'left' }}
                       onClick={() => setExpandedLeague(isExpanded ? null : lg.leagueId)}
                     >
                       <div className="flex justify-between items-center" style={{ marginBottom: '0.4rem' }}>
@@ -198,7 +198,7 @@ export default function Dashboard() {
                           )}
                         </div>
                       )}
-                    </div>
+                    </button>
 
                     {/* Inline draft targets panel */}
                     {isExpanded && (
