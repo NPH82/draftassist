@@ -8,11 +8,92 @@ const router = express.Router();
 
 const sleeperService = require('../services/sleeperService');
 const { requireAuth } = require('../middleware/auth');
-const { computeRosterMaturity, analyzePositionalNeeds } = require('../services/winWindowService');
+const {
+  computeRosterMaturity,
+  analyzePositionalNeeds,
+  buildRosterComposition,
+  scoreDraftFit,
+} = require('../services/winWindowService');
 const { generateBuySellAlerts } = require('../services/alertService');
 const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
+
+function toInt(value) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isRookieDraftContext(draftData = {}, league = {}) {
+  const rounds = draftData.settings?.rounds || 0;
+  const teams = draftData.settings?.teams || league.totalRosters || 12;
+  if (rounds > 0 && rounds < teams) return true;
+
+  const text = [draftData.metadata?.name, draftData.metadata?.description, league.name]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return /rookie|devy/.test(text);
+}
+
+async function resolveDraftClassYear({ requestedYear, draftData, league }) {
+  const currentYear = new Date().getFullYear();
+  const explicit = toInt(requestedYear);
+  if (explicit) return explicit;
+
+  let season = toInt(draftData?.season) || toInt(league?.season) || currentYear;
+
+  // Sleeper can still report previous season for offseason rookie drafts.
+  if (season < currentYear) {
+    const hasCurrentClass = await Player.exists({ nflDraftYear: currentYear });
+    if (hasCurrentClass) season = currentYear;
+  }
+
+  return season;
+}
+
+function playerValueSignal(player) {
+  if (player.ktcValue) return player.ktcValue;
+  if (player.fantasyProsRank) return Math.max(0, 12000 - (player.fantasyProsRank * 120));
+  return 0;
+}
+
+function buildTeamContext(players = []) {
+  const ctx = {};
+
+  for (const p of players) {
+    if (!p.team || !p.position) continue;
+    if (!ctx[p.team]) {
+      ctx[p.team] = {
+        rbValue: 0,
+        wrTeValue: 0,
+        totalSkillValue: 0,
+        elitePassCatchers: 0,
+      };
+    }
+
+    const value = playerValueSignal(p);
+    if (p.position === 'RB') ctx[p.team].rbValue += value;
+    if (p.position === 'WR' || p.position === 'TE') ctx[p.team].wrTeValue += value;
+    if (['RB', 'WR', 'TE', 'QB'].includes(p.position)) ctx[p.team].totalSkillValue += value;
+
+    const isElitePassCatcher = (p.position === 'WR' || p.position === 'TE') &&
+      ((p.ktcValue || 0) >= 5000 || ((p.fantasyProsRank || 9999) <= 36));
+    if (isElitePassCatcher) ctx[p.team].elitePassCatchers += 1;
+  }
+
+  for (const team of Object.keys(ctx)) {
+    const t = ctx[team];
+    t.passHeavy = t.wrTeValue > t.rbValue * 1.25;
+    t.runHeavy = t.rbValue > t.wrTeValue * 1.1;
+    if (t.totalSkillValue >= 24000) t.offenseTier = 'high';
+    else if (t.totalSkillValue <= 9000) t.offenseTier = 'low';
+    else t.offenseTier = 'neutral';
+  }
+
+  return ctx;
+}
 
 // GET /api/leagues -- all leagues for logged-in user
 router.get('/', requireAuth, async (req, res) => {
@@ -63,7 +144,7 @@ router.get('/', requireAuth, async (req, res) => {
         const playerIds = r.players || [];
         const futurePicks = r.picks || [];
         const maturity = computeRosterMaturity(playerIds, playerMap, futurePicks);
-        const needs = analyzePositionalNeeds(playerIds, playerMap, sl.roster_positions);
+        const needs = analyzePositionalNeeds(playerIds, playerMap, sl.roster_positions, sl.scoring_settings);
         return {
           rosterId: r.roster_id,
           ownerId: r.owner_id,
@@ -211,11 +292,17 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
     const draftedIds = new Set(picks.map(p => p.player_id).filter(Boolean));
     const picksMade = picks.length;
 
-    // All players sorted by DAS score — rookie drafts show only current season's draft class
-    const draftSeason = parseInt(draftData.season) || new Date().getFullYear();
-    const isRookieDraft = rounds < totalTeams;
+    // All players sorted by DAS score — rookie/devy drafts should only show a single class year.
+    const isRookieDraft = isRookieDraftContext(draftData, league);
+    const draftSeason = isRookieDraft
+      ? await resolveDraftClassYear({ requestedYear: req.query.classYear, draftData, league })
+      : null;
     const playerFilter = isRookieDraft ? { nflDraftYear: draftSeason } : {};
     const allPlayers = await Player.find(playerFilter).sort({ dasScore: -1 }).lean();
+    const teamContextPlayers = await Player.find({ position: { $in: ['QB', 'RB', 'WR', 'TE'] } })
+      .select('team position ktcValue fantasyProsRank')
+      .lean();
+    const teamContext = buildTeamContext(teamContextPlayers);
 
     // Assign an ADP rank to each player (lower = more in-demand)
     const sortedByDemand = allPlayers.slice().sort((a, b) => {
@@ -227,7 +314,41 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
 
     // Positional needs for the user's roster
     const myRoster = league.rosters.find(r => r.ownerId === sleeperId);
-    const positionalNeeds = myRoster?.positionalNeeds || {};
+
+    const rosterPlayerDocs = await Player.find({ sleeperId: { $in: myRoster?.playerIds || [] } })
+      .select('sleeperId position age isPassCatcher depthChartPosition')
+      .lean();
+    const rosterPlayerMap = Object.fromEntries(rosterPlayerDocs.map(p => [p.sleeperId, p]));
+
+    let sleeperPlayerMap = {};
+    try {
+      sleeperPlayerMap = await sleeperService.getAllPlayers('nfl');
+    } catch (e) {
+      console.warn('[Draft Targets] Sleeper fallback map unavailable:', e.message);
+    }
+    for (const id of (myRoster?.playerIds || [])) {
+      if (rosterPlayerMap[id]) continue;
+      const sp = sleeperPlayerMap[id];
+      if (!sp || !['QB', 'RB', 'WR', 'TE'].includes(sp.position)) continue;
+      rosterPlayerMap[id] = {
+        sleeperId: id,
+        position: sp.position,
+        age: sp.age || null,
+      };
+    }
+
+    const rosterComposition = buildRosterComposition(
+      myRoster?.playerIds || [],
+      rosterPlayerMap,
+      league.rosterPositions || [],
+      league.scoringSettings || {}
+    );
+    const positionalNeeds = analyzePositionalNeeds(
+      myRoster?.playerIds || [],
+      rosterPlayerMap,
+      league.rosterPositions || [],
+      league.scoringSettings || {}
+    );
     const needOrder = { high: 0, medium: 1, low: 2 };
 
     // Load any existing feedback
@@ -255,7 +376,10 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
         const aNeed = needOrder[positionalNeeds[a.position] || 'low'];
         const bNeed = needOrder[positionalNeeds[b.position] || 'low'];
         if (aNeed !== bNeed) return aNeed - bNeed;
-        return (b.dasScore || 0) - (a.dasScore || 0);
+
+        const aScore = (a.dasScore || 0) + scoreDraftFit(a, rosterComposition, teamContext);
+        const bScore = (b.dasScore || 0) + scoreDraftFit(b, rosterComposition, teamContext);
+        return bScore - aScore;
       });
 
       // BPA sort for alternatives

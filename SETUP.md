@@ -167,3 +167,12 @@ The frontend is a Progressive Web App. Users can:
 **Scraper returns stale data**: Scrapers fall back to last cached DB data. If a scraper consistently fails, check if the source site changed its HTML structure.
 
 **Draft not showing**: Sleeper draft must be in `drafting` status. Mocks and completed drafts are filtered out.
+
+**Wrong rookie class in draft targets**: Rookie/Devy recommendations now auto-detect class year, but Sleeper offseason season labels can lag. Use `classYear` override when needed:
+
+```bash
+GET /api/leagues/:leagueId/draft-targets?classYear=2026
+GET /api/draft/:draftId?classYear=2026
+```
+
+If position need tags feel stale, refresh league cache by reloading the Dashboard (`/api/leagues` recomputes needs from current roster, SuperFlex, and TE premium scoring context).
