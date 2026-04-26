@@ -63,9 +63,20 @@ async function getTradedPicks(draftId) {
 
 // ── Players ───────────────────────────────────────────────────────────────────
 
+// In-memory cache for the full player list (large ~2MB payload, changes rarely)
+let _allPlayersCache = null;
+let _allPlayersCacheAt = 0;
+const ALL_PLAYERS_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 // Full player database -- large payload, cache aggressively
 async function getAllPlayers(sport = 'nfl') {
+  const now = Date.now();
+  if (_allPlayersCache && now - _allPlayersCacheAt < ALL_PLAYERS_TTL_MS) {
+    return _allPlayersCache;
+  }
   const { data } = await http.get(`/players/${sport}`);
+  _allPlayersCache = data;
+  _allPlayersCacheAt = now;
   return data;  // map of player_id -> player object
 }
 

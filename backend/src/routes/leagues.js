@@ -22,9 +22,37 @@ router.get('/', requireAuth, async (req, res) => {
     // Fetch fresh from Sleeper
     const sleeperLeagues = await sleeperService.getUserLeagues(sleeperId, 'nfl', year);
 
-    // Build player map for win window calculations
+    // Build player map for win window calculations.
+    // Primary: our DB (has DAS scores, KTC/FP values, etc.), keyed by sleeperId.
+    // Fallback: Sleeper's full player list for any roster player IDs not in our DB.
     const allPlayers = await Player.find({}).lean();
-    const playerMap = Object.fromEntries(allPlayers.map(p => [p.sleeperId, p]));
+    const playerMap = Object.fromEntries(
+      allPlayers.filter(p => p.sleeperId).map(p => [p.sleeperId, p])
+    );
+
+    // Augment with Sleeper's own player data so veterans on the roster
+    // are recognised even before our scraper / sync has run.
+    let sleeperPlayerMap = {};
+    try {
+      sleeperPlayerMap = await sleeperService.getAllPlayers('nfl');
+    } catch (e) {
+      console.warn('[Leagues] Could not fetch Sleeper player map:', e.message);
+    }
+    // For each Sleeper player not already in our map, add a minimal entry
+    // so win-window age/position maths work for established veterans.
+    for (const [id, sp] of Object.entries(sleeperPlayerMap)) {
+      if (!playerMap[id] && sp.position && ['QB', 'RB', 'WR', 'TE'].includes(sp.position)) {
+        playerMap[id] = {
+          sleeperId: id,
+          name: sp.full_name || sp.first_name + ' ' + sp.last_name,
+          position: sp.position,
+          team: sp.team,
+          age: sp.age || null,
+          ktcValue: 0,
+          fantasyProsValue: 0,
+        };
+      }
+    }
 
     const leagueData = await Promise.all(sleeperLeagues.map(async (sl) => {
       const rosters = await sleeperService.getRosters(sl.league_id);
@@ -111,7 +139,9 @@ router.get('/:leagueId/alerts', requireAuth, async (req, res) => {
     if (!myRoster) return res.json({ alerts: [] });
 
     const allPlayers = await Player.find({}).lean();
-    const playerMap = Object.fromEntries(allPlayers.map(p => [p.sleeperId, p]));
+    const playerMap = Object.fromEntries(
+      allPlayers.filter(p => p.sleeperId).map(p => [p.sleeperId, p])
+    );
 
     const lookback = parseInt(req.query.days) || 30;
     const alerts = await generateBuySellAlerts(myRoster.playerIds, playerMap, lookback);
