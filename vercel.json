@@ -12,7 +12,7 @@
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "https://your-render-app.onrender.com/api/$1"
+      "dest": "https://draftassist.onrender.com/api/$1"
     },
     {
       "src": "/(.*)",

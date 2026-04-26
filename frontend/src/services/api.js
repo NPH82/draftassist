@@ -41,5 +41,7 @@ export const getTradeHubSuggestions = () => api.get('/tradehub').then(r => r.dat
 export const getDataStatus = () => api.get('/admin/data-status').then(r => r.data);
 export const refreshRankings = () => api.post('/admin/refresh/rankings').then(r => r.data);
 export const refreshDepthCharts = () => api.post('/admin/refresh/depth-charts').then(r => r.data);
+export const triggerLearn = () => api.post('/admin/learn').then(r => r.data);
+export const getManagerProfiles = () => api.get('/admin/manager-profiles').then(r => r.data);
 
 export default api;
