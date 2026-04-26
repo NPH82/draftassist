@@ -49,6 +49,7 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
     if (roster.ownerId === userId) continue;
     const theirNextPick = roster.nextPickNumber;
     if (!theirNextPick || theirNextPick >= ourPickNumber) continue;
+    if (targetPicksAt && theirNextPick < targetPicksAt) continue;
 
     // Load tendency profile
     const profile = await ManagerProfile.findOne({ sleeperId: roster.ownerId }).lean();
@@ -113,6 +114,37 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
       safeZone: theirNextPick < targetMarketPick,
       reason: `Trade pick ${ourPickNumber} to ${roster.ownerUsername || 'this manager'} — drop ${picksBack} spot${picksBack !== 1 ? 's' : ''} to pick ${theirNextPick}, still land ${targetPlayer.name} (expected ~${Math.round(targetMarketPick)}) + gain ${Math.round(capitalGained)} KTC.`,
     });
+  }
+
+  // Fallback: if no strict safe-zone options, surface closest potential partners
+  // in a small extension window so the UI is still actionable.
+  if (suggestions.length === 0) {
+    const exploratoryUntil = availableUntilPick + 3;
+    for (const roster of allRosters) {
+      if (roster.ownerId === userId) continue;
+      const theirNextPick = roster.nextPickNumber;
+      if (!theirNextPick || theirNextPick <= ourPickNumber || theirNextPick > exploratoryUntil) continue;
+
+      const ourPickValue = estimatePickValue(ourPickNumber);
+      const theirPickValue = estimatePickValue(theirNextPick);
+      const capitalGained = ourPickValue - theirPickValue;
+      const picksBack = theirNextPick - ourPickNumber;
+      const targetMarketPick = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || availableUntilPick;
+
+      suggestions.push({
+        type: 'trade-down',
+        targetManager: { sleeperId: roster.ownerId, username: roster.ownerUsername || roster.ownerName },
+        targetPlayer,
+        swapOurPick: ourPickNumber,
+        receiveTheirPick: theirNextPick,
+        picksBack,
+        capitalGained,
+        targetExpectedPick: Math.round(targetMarketPick),
+        safeZone: false,
+        exploratory: true,
+        reason: `Exploratory: trade pick ${ourPickNumber} to ${roster.ownerUsername || 'this manager'} for pick ${theirNextPick}. ${targetPlayer.name} may still be available near ~${Math.round(targetMarketPick)}, but this path carries more risk.`,
+      });
+    }
   }
 
   // Sort: safest (most capital gained while still before target falls) first

@@ -201,6 +201,11 @@ function PickTargetCard({ pick, leagueId, draftId, onFeedbackSaved }) {
               )}
               {trades && (
                 <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  {trades.context?.targetExpectedPick != null && (
+                    <div className="text-xs text-muted">
+                      Expected pick for {pick.recommendation?.name}: ~#{trades.context.targetExpectedPick} (your next pick #{trades.context.myNextPickNumber || '--'})
+                    </div>
+                  )}
                   {trades.tradeUp?.length > 0 && (
                     <>
                       <div className="text-xs font-semibold text-muted">Move up to secure them</div>

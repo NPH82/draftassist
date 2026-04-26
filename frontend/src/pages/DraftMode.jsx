@@ -167,6 +167,11 @@ function DraftModeInner({ draftId }) {
           </button>
           {hintTrades && (
             <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              {hintTrades.context?.targetExpectedPick != null && (
+                <div className="text-xs text-muted">
+                  Expected pick: ~#{hintTrades.context.targetExpectedPick} (your next pick #{hintTrades.context.myNextPickNumber || '--'})
+                </div>
+              )}
               {hintTrades.tradeUp?.length > 0 && (
                 <>
                   <div className="text-xs font-semibold text-muted">Move up to secure them</div>

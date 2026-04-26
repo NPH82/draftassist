@@ -108,6 +108,34 @@ function marketRankSignal(player = {}, fallbackRank = 999) {
   return fallbackRank;
 }
 
+function estimateTradeTargetPick(player = {}, { myNextPickNumber, totalRosters = 12, isRookieDraft = false }) {
+  const signals = [];
+  const adp = Number(player.underdogAdp || 0);
+  const fp = Number(player.fantasyProsRank || 0);
+  const personal = Number(player.personalRank || 0);
+  const ktc = Number(player.ktcRank || 0);
+
+  if (adp > 0) signals.push(adp);
+  if (fp > 0) signals.push(fp);
+  if (personal > 0) signals.push(personal);
+  if (ktc > 0) signals.push(ktc);
+
+  // Rookie/devy boards often let "name" players slide later than pure FP rank,
+  // especially when no Underdog ADP is available.
+  if (isRookieDraft && adp <= 0 && fp > 0) {
+    const drift = Math.max(3, Math.round(totalRosters * 0.35));
+    signals.push(fp + drift);
+  }
+
+  if (!signals.length) return myNextPickNumber;
+  const sorted = signals.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+  return Math.max(1, Math.round(median));
+}
+
 function reachPenaltyFromMarket({ player, currentPick, needTier = 'low', availabilityProb = null, reachDiscipline = 1, fallbackRank = 999 }) {
   const marketRank = marketRankSignal(player, fallbackRank);
   const gap = marketRank - currentPick; // positive means likely available later
@@ -610,11 +638,18 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
     // Trade-up: only when the target is genuinely at risk of being stolen before our pick
     // (high availability prob = others will grab them). Trade-down: when they'll fall past us.
     let tradeUp = [], tradeDown = [];
+    let targetExpectedPick = null;
 
     if (targetPlayerId) {
       const targetPlayer = playerMap[targetPlayerId] || allPlayers.find(p => p._id.toString() === targetPlayerId);
       if (targetPlayer) {
-        const marketRank = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || myNextPickNumber;
+        const isRookieDraft = isRookieDraftContext(draftData, league || {});
+        const marketRank = estimateTradeTargetPick(targetPlayer, {
+          myNextPickNumber,
+          totalRosters,
+          isRookieDraft,
+        });
+        targetExpectedPick = marketRank;
 
         // Trade-up: target projects to go BEFORE our next pick — someone may steal them.
         // Only surface if market rank < our next pick (we'd be moving up to secure them).
@@ -622,8 +657,8 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
         const tradeUpUntil = Math.max(1, Math.round(marketRank));
 
         // Trade-down: target projects to fall PAST our current pick — we can drop back and
-        // still land them while gaining capital. Safe window = 92% of market rank.
-        const safeUntil = Math.floor(marketRank * 0.92);
+        // still land them while gaining capital.
+        const safeUntil = Math.max(myNextPickNumber + 1, Math.round(marketRank - 1));
 
         [tradeUp, tradeDown] = await Promise.all([
           targetGoesBeforeUs
@@ -634,7 +669,14 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
       }
     }
 
-    res.json({ tradeUp, tradeDown });
+    res.json({
+      tradeUp,
+      tradeDown,
+      context: {
+        myNextPickNumber,
+        targetExpectedPick,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
