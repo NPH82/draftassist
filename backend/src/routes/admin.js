@@ -5,7 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
-const { refreshDailyRankings, refreshDepthCharts } = require('../scrapers/index');
+const { refreshDailyRankings, refreshDepthCharts, loadPlayerData } = require('../scrapers/index');
 const { learnFromUserLeagues } = require('../services/learningEngine');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
@@ -34,6 +34,19 @@ router.post('/refresh/depth-charts', requireAuth, async (req, res) => {
       .then(() => console.log('[Admin] Depth charts refresh complete'))
       .catch(err => console.error('[Admin] Depth charts error', err));
     res.json({ ok: true, message: 'Depth chart refresh started -- data will update within ~60 seconds' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/load-player-data -- one-time deep load: PFR combine stats, ESPN draft results, RotoWire college injuries
+router.post('/load-player-data', requireAuth, async (req, res) => {
+  try {
+    console.log('[Admin] Manual player data load triggered');
+    loadPlayerData()
+      .then(r => console.log('[Admin] Player data load complete', r))
+      .catch(err => console.error('[Admin] Player data load error', err));
+    res.json({ ok: true, message: 'Player data load started (PFR + ESPN + RotoWire) -- data will update within ~2 minutes' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

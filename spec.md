@@ -29,8 +29,16 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **Seed data**: 48 2025 rookies pre-loaded in `backend/data/rookieSeed.json` as starting point; scrapers merge live data on top once source sites publish post-draft dynasty rankings (typically within days of the NFL Draft)
 - **Mongoose deprecation fixes**: All `findOneAndUpdate` calls updated from `{ new: true }` → `{ returnDocument: 'after' }` across `auth.js`, `leagues.js`, and `learningEngine.js` (×2) -- committed `08a0e17`
 - **2026 rookie class seeded**: `backend/data/rookieSeed2026.json` added with the dynasty Top 48 age/opportunity-adjusted SF rookie board (Carnell Tate #1 overall). Startup guard updated from a global `count === 0` check to a year-specific `countDocuments({ nflDraftYear: 2026 }) === 0` so new draft-year classes seed alongside existing data without wiping the DB -- committed `1a31815`
-- **`POST /api/admin/seed-rookies/:year`** endpoint added: manually seeds a draft class from `rookieSeed{year}.json` if the year is not yet in the DB; skips with a message if already seeded. Dashboard now has a **Seed 2026 Rookie Class** button
-- **Sleeper player ID sync**: `POST /api/admin/sync-sleeper-ids` endpoint added -- fetches the full Sleeper `/players/nfl` player map (~8,000 players) and back-fills any missing `sleeperId` values on Player documents using name+position matching (handles `Jr.`/`Sr.`/`II`/`III`/`IV` suffix variants). Dashboard now has a **Sync Sleeper Player IDs** button. This ensures scraper data (FantasyPros/KTC value updates) matches to the correct player documents -- committed `71da687`
+- **`POST /api/admin/seed-rookies/:year`** endpoint added: manually seeds a draft class from `rookieSeed{year}.json` if the year is not yet in the DB; skips with a message if already seeded. Dashboard has a **Seed 2026 Rookie Class** button as a manual override
+- **Sleeper player ID sync**: `POST /api/admin/sync-sleeper-ids` endpoint added -- back-fills any missing `sleeperId` values on Player documents using name+position matching (handles `Jr.`/`Sr.`/`II`/`III`/`IV` suffix variants). Dashboard has a **Sync Sleeper Player IDs** button as a manual override. This runs automatically on every startup -- committed `71da687`
+- **Veteran player import**: `POST /api/admin/import-sleeper-players` endpoint added -- upserts all QB/RB/WR/TE players from Sleeper's `/players/nfl` into the DB. On insert: sets `name`, `position`, `sleeperId`, `team`, `age`, `injuryStatus`. On update: only refreshes `team`/`age`/`injuryStatus`, never overwrites `ktcValue`/`fantasyProsValue`/`dasScore` from scrapers. Dashboard has an **Import All Sleeper Players** button as a manual override. Runs automatically at startup when DB has fewer than 500 players and weekly every Sunday at 2am via the scheduler
+- **`learningEngine.js` SyntaxError fix**: 149 lines of stale duplicate code (containing bare top-level `await` calls) were removed from after the `module.exports` block. This code was unreachable and caused a `SyntaxError: await is only valid in async functions` crash on Render (Node v24, CommonJS) -- committed `ed3f5fc`
+- **`playerMap` veteran fallback in `leagues.js`**: After building the primary DB-keyed map, the `GET /api/leagues` handler also fetches the Sleeper player map (from 24h in-memory cache) and fills in any skill-position player IDs not yet in our DB. This is a safety net for players added mid-season between weekly sync runs
+- **`sleeperService.getAllPlayers()` cached**: Added 24h in-memory cache to avoid repeated ~2MB Sleeper API fetches within the same process. Cache is invalidated on Render restart
+- **`sleeperSync.js` service created**: `backend/src/services/sleeperSync.js` centralises `importSleeperPlayers()` and `syncSleeperIds()`. Both admin endpoints and the scheduler delegate to this service -- no duplicated logic
+- **Automated startup sequence** (`server.js`): (1) seed 2025 rookies if DB empty, (2) seed 2026 rookies if none present, (3) import all Sleeper skill-position players if DB has fewer than 500 total, (4) sync `sleeperId` for any unmatched players, (5) start scheduler
+- **Weekly Sleeper sync job** added to `scheduler.js`: runs every Sunday at 2am -- re-imports to refresh team/age/injury and back-fills any new ID gaps
+- **`POST /api/admin/load-player-data`** endpoint wired up: triggers the one-time deep-load scrapers (PFR combine stats, ESPN draft results, RotoWire college injuries) on demand. Previously `loadPlayerData()` was exported from `scrapers/index.js` but not reachable via any route
 
 ---
 
@@ -67,7 +75,99 @@ The app's recommendations are grounded in the following positional evaluation cr
 
 ---
 
-## Architecture Decisions
+## Backend Architecture
+
+### Directory Layout (`backend/src/`)
+
+```
+server.js           Entry point: DB connect → seed → Sleeper import → sync IDs → start scheduler
+app.js              Express app: middleware, route mounting, CORS
+config/db.js        Mongoose connection
+jobs/scheduler.js   node-cron registered jobs (daily rankings, weekly depth charts, weekly Sleeper sync)
+middleware/auth.js  requireAuth middleware (Bearer token → req.user)
+models/             Mongoose schemas (Player, League, ManagerProfile, RankingSnapshot, DraftSession, User)
+routes/             Express routers (one file per domain)
+  admin.js          Protected management endpoints
+  auth.js           Login / logout / session check
+  draft.js          Live draft board, polling, queue
+  leagues.js        League + roster fetch, win window, alerts
+  players.js        Player search, detail, DAS
+  tradehub.js       Off-season trade suggestions
+scrapers/
+  index.js          Orchestrator: refreshDailyRankings(), refreshDepthCharts(), loadPlayerData()
+  fantasyProsScraper.js
+  keepTradeCutScraper.js
+  underdogScraper.js
+  ourLadsScraper.js
+  pfrScraper.js
+  espnScraper.js
+  rotowireScraper.js
+services/
+  sleeperService.js   All Sleeper API calls; getAllPlayers() has 24h in-memory cache
+  sleeperSync.js      importSleeperPlayers() + syncSleeperIds() — used by startup, scheduler, and admin routes
+  scoringEngine.js    calculateDAS() — Draft Assistant Score
+  winWindowService.js computeRosterMaturity() + analyzePositionalNeeds()
+  alertService.js     generateBuySellAlerts()
+  learningEngine.js   ingestDraft() + learnFromUserLeagues() + generateScoutingNotes()
+  tradeEngine.js      Trade suggestion logic
+  availabilityPredictor.js  Pick-by-pick availability probability
+```
+
+### Startup Sequence (`server.js`)
+
+1. Connect to MongoDB Atlas
+2. Seed 2025 rookie class (`rookieSeed.json`) if DB is empty
+3. Seed 2026 rookie class (`rookieSeed2026.json`) if no 2026 players present
+4. **Auto-import all skill-position veterans** from Sleeper `/players/nfl` if DB has fewer than 500 players (`importSleeperPlayers()`)
+5. **Back-fill `sleeperId`** for any players missing one (`syncSleeperIds()`) — no-op when all IDs set
+6. Start node-cron scheduler
+
+### Scheduled Jobs (`jobs/scheduler.js`)
+
+| Schedule | Job |
+|---|---|
+| Daily 3:00 AM | `refreshDailyRankings()` — FantasyPros, KTC, Underdog ADP |
+| Monday 4:00 AM | `refreshDepthCharts()` — OurLads |
+| Sunday 2:00 AM | `importSleeperPlayers()` + `syncSleeperIds()` — keeps team/age/injury current, fills new ID gaps |
+
+### Admin Endpoints (`/api/admin/*`, all require auth)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/refresh/rankings` | Trigger daily rankings scrape now |
+| POST | `/refresh/depth-charts` | Trigger depth chart scrape now |
+| POST | `/load-player-data` | Trigger one-time deep load: PFR + ESPN + RotoWire |
+| POST | `/seed-rookies/:year` | Seed a draft class from `rookieSeed{year}.json` (skips if already present) |
+| POST | `/import-sleeper-players` | Upsert all skill-position players from Sleeper (safe to re-run) |
+| POST | `/sync-sleeper-ids` | Back-fill `sleeperId` on unmatched players |
+| POST | `/learn` | Scan user leagues + leaguemate leagues for completed drafts |
+| GET | `/data-status` | Last-updated timestamps per data source |
+| GET | `/manager-profiles` | Scouting summaries for all leaguemates |
+
+### Player Data Flow
+
+```
+Sleeper /players/nfl (weekly sync)
+        │
+        ▼
+sleeperSync.importSleeperPlayers()
+  → upserts QB/RB/WR/TE with team/age/injuryStatus
+  → never overwrites ktcValue/fantasyProsValue/dasScore
+        │
+        ▼
+MongoDB Player collection  ◄── scrapers attach KTC/FP/ADP/depth chart values by name match
+        │
+        ▼
+leagues.js GET /  → builds playerMap (DB primary, Sleeper in-memory fallback)
+        │
+        ▼
+winWindowService.computeRosterMaturity()  → Roster Maturity Score + win window label
+winWindowService.analyzePositionalNeeds() → positional need gaps
+```
+
+---
+
+
 
 ### Stack
 - **Frontend:** React (MERN), deployed to **Vercel** (free tier)
