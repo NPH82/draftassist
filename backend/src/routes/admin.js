@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { refreshDailyRankings, refreshDepthCharts, loadPlayerData } = require('../scrapers/index');
-const { learnFromUserLeagues } = require('../services/learningEngine');
+const { learnFromUserLeagues, enrichProfilesWithDraftClass } = require('../services/learningEngine');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const sleeperService = require('../services/sleeperService');
@@ -125,7 +125,7 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
       sleeperId: { $in: [...leaguemateIds] },
     }).lean();
 
-    const enriched = profiles.map(p => ({
+    const baseEnriched = profiles.map(p => ({
       sleeperId: p.sleeperId,
       username: p.username,
       scoutingNotes: p.scoutingNotes || [],
@@ -135,10 +135,13 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
         .sort(([, a], [, b]) => b - a).slice(0, 3).map(([name, count]) => ({ name, count })),
       topNflTeams: Object.entries(p.nflTeamAffinities || {})
         .sort(([, a], [, b]) => b - a).slice(0, 3).map(([team, count]) => ({ team, count })),
+      playerPickCounts: p.playerPickCounts,
       totalPicksObserved: p.totalPicksObserved,
       draftsObserved: p.draftsObserved?.length || 0,
       lastUpdated: p.lastUpdated,
     }));
+
+    const enriched = await enrichProfilesWithDraftClass(baseEnriched);
 
     const totalProfiled = enriched.filter(p => p.totalPicksObserved > 0).length;
 

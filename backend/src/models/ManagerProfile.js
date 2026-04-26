@@ -27,6 +27,10 @@ const managerProfileSchema = new mongoose.Schema({
   // Favorite NFL teams (team abbreviation -> frequency count)
   nflTeamAffinities: { type: Map, of: Number, default: {} },
 
+  // Player pick counts: sleeperId -> total times drafted across all observed drafts
+  // Used to surface favorite players from the current draft class
+  playerPickCounts: { type: Map, of: Number, default: {} },
+
   // ADP deviation: how early/late they draft relative to board (negative = early, positive = late)
   avgAdpDeviation: { type: Number, default: 0 },
 

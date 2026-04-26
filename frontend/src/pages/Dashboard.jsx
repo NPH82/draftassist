@@ -324,8 +324,10 @@ export default function Dashboard() {
                         <span className="font-semibold text-sm">{p.username || p.sleeperId}</span>
                         <span className="text-xs text-muted">{p.draftsObserved} draft{p.draftsObserved !== 1 ? 's' : ''} · {p.totalPicksObserved} picks</span>
                       </div>
+
+                      {/* Scouting notes */}
                       {p.scoutingNotes?.length > 0 ? (
-                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.4rem' }}>
                           {p.scoutingNotes.map((note, i) => (
                             <li key={i} className="text-xs text-secondary">
                               <span style={{ color: 'var(--yellow)', marginRight: '0.3rem' }}>!</span>{note}
@@ -333,11 +335,46 @@ export default function Dashboard() {
                           ))}
                         </ul>
                       ) : (
-                        <div className="text-xs text-muted">Not enough data for tendencies yet</div>
+                        <div className="text-xs text-muted" style={{ marginBottom: '0.4rem' }}>Not enough data for tendencies yet</div>
                       )}
-                      {p.topColleges?.length > 0 && (
-                        <div className="text-xs text-muted" style={{ marginTop: '0.2rem' }}>
-                          Favors: {p.topColleges.map(c => c.name).join(', ')}
+
+                      {/* College + NFL team row */}
+                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        {p.topColleges?.length > 0 && (
+                          <div className="text-xs text-muted">
+                            <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>Colleges: </span>
+                            {p.topColleges.map(c => c.name).join(', ')}
+                          </div>
+                        )}
+                        {p.topNflTeams?.length > 0 && (
+                          <div className="text-xs text-muted">
+                            <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>NFL Teams: </span>
+                            {p.topNflTeams.map(t => t.team).join(', ')}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Favorite 2026 draft class players */}
+                      {p.favoriteDraftClassPlayers?.length > 0 && (
+                        <div style={{ marginTop: '0.4rem' }}>
+                          <div className="text-xs font-semibold text-muted" style={{ marginBottom: '0.2rem' }}>2026 Targets:</div>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            {p.favoriteDraftClassPlayers.map((fp, i) => (
+                              <span key={i} style={{
+                                background: 'var(--bg-secondary)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 4,
+                                padding: '0.1rem 0.4rem',
+                                fontSize: '0.75rem',
+                              }}>
+                                {fp.name}
+                                <span className="text-muted"> · {fp.position}</span>
+                                {fp.timesDrafted > 1 && (
+                                  <span style={{ color: 'var(--yellow)', marginLeft: '0.25rem' }}>×{fp.timesDrafted}</span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>

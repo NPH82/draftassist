@@ -11,6 +11,7 @@ const { requireAuth } = require('../middleware/auth');
 const { detectValueGap } = require('../services/scoringEngine');
 const { predictAvailability, detectFallers } = require('../services/availabilityPredictor');
 const { suggestTradeUp, suggestTradeDown } = require('../services/tradeEngine');
+const { enrichProfilesWithDraftClass } = require('../services/learningEngine');
 const Player = require('../models/Player');
 const Draft = require('../models/Draft');
 const League = require('../models/League');
@@ -227,7 +228,16 @@ router.get('/:draftId/scouting/:managerId', requireAuth, async (req, res) => {
   try {
     const profile = await ManagerProfile.findOne({ sleeperId: req.params.managerId }).lean();
     if (!profile) return res.json({ noData: true, message: 'No draft history available yet for this manager' });
-    res.json(profile);
+
+    const [enriched] = await enrichProfilesWithDraftClass([profile]);
+    const result = {
+      ...enriched,
+      topColleges: Object.entries(enriched.collegeAffinities || {})
+        .sort(([, a], [, b]) => b - a).slice(0, 3).map(([name, count]) => ({ name, count })),
+      topNflTeams: Object.entries(enriched.nflTeamAffinities || {})
+        .sort(([, a], [, b]) => b - a).slice(0, 3).map(([team, count]) => ({ team, count })),
+    };
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -74,6 +74,7 @@ async function updateManagerProfile(sleeperId, username, picks, draftId) {
   const earlyPosCount = { QB: 0, RB: 0, WR: 0, TE: 0 };
   const colleges = {};
   const nflTeams = {};
+  const playerCounts = {};
 
   for (const pick of picks) {
     const pos = (pick.metadata?.position || '').toUpperCase();
@@ -89,6 +90,9 @@ async function updateManagerProfile(sleeperId, username, picks, draftId) {
 
     const team = pick.metadata?.team;
     if (team) nflTeams[team] = (nflTeams[team] || 0) + 1;
+
+    // Track which specific players this manager drafts
+    if (pick.player_id) playerCounts[pick.player_id] = (playerCounts[pick.player_id] || 0) + 1;
   }
 
   const totalPicks = picks.length;
@@ -112,14 +116,19 @@ async function updateManagerProfile(sleeperId, username, picks, draftId) {
   for (const [team, count] of Object.entries(nflTeams)) {
     nflTeamMap[team] = (nflTeamMap[team] || 0) + count;
   }
+  const playerCountMap = Object.fromEntries(profile.playerPickCounts || []);
+  for (const [pid, count] of Object.entries(playerCounts)) {
+    playerCountMap[pid] = (playerCountMap[pid] || 0) + count;
+  }
 
-  const notes = generateScoutingNotes(newPosWeights, newEarlyWeights, collegeMap);
+  const notes = generateScoutingNotes(newPosWeights, newEarlyWeights, collegeMap, nflTeamMap);
 
   const update = {
     positionWeights: newPosWeights,
     earlyRoundPositionWeights: newEarlyWeights,
     collegeAffinities: collegeMap,
     nflTeamAffinities: nflTeamMap,
+    playerPickCounts: playerCountMap,
     scoutingNotes: notes,
     $addToSet: { draftsObserved: draftId },
     $inc: { totalPicksObserved: totalPicks },
@@ -130,7 +139,7 @@ async function updateManagerProfile(sleeperId, username, picks, draftId) {
   await ManagerProfile.findOneAndUpdate({ sleeperId }, update);
 }
 
-function generateScoutingNotes(posWeights, earlyWeights, colleges) {
+function generateScoutingNotes(posWeights, earlyWeights, colleges, nflTeams = {}) {
   const notes = [];
 
   const topPos = Object.entries(posWeights).sort(([, a], [, b]) => b - a)[0];
@@ -144,7 +153,58 @@ function generateScoutingNotes(posWeights, earlyWeights, colleges) {
     notes.push(`Consistently targets ${sortedColleges[0][0]} players`);
   }
 
+  const sortedTeams = Object.entries(nflTeams).sort(([, a], [, b]) => b - a);
+  if (sortedTeams[0] && sortedTeams[0][1] >= 2) {
+    const teamStr = sortedTeams.slice(0, 2).map(([t]) => t).join(' and ');
+    notes.push(`Frequently targets ${teamStr} players`);
+  }
+
   return notes;
+}
+
+/**
+ * Batch-enrich an array of profile objects with favoriteDraftClassPlayers.
+ * Does a single DB query per call. Returns a new array (does not mutate).
+ * @param {object[]} profiles - lean ManagerProfile objects or API-shaped objects
+ * @param {number} draftYear - draft year to filter by (default 2026)
+ */
+async function enrichProfilesWithDraftClass(profiles, draftYear = 2026) {
+  // Collect every player ID seen across all profiles
+  const allPlayerIds = new Set();
+  for (const p of profiles) {
+    const counts = p.playerPickCounts instanceof Map
+      ? Object.fromEntries(p.playerPickCounts)
+      : (p.playerPickCounts || {});
+    for (const pid of Object.keys(counts)) allPlayerIds.add(pid);
+  }
+
+  if (allPlayerIds.size === 0) {
+    return profiles.map(p => ({ ...p, favoriteDraftClassPlayers: [] }));
+  }
+
+  // Single DB query -- only current draft class
+  const classPlayers = await Player.find({
+    sleeperId: { $in: [...allPlayerIds] },
+    nflDraftYear: draftYear,
+  }).lean();
+  const classPlayerMap = Object.fromEntries(classPlayers.map(cp => [cp.sleeperId, cp]));
+
+  return profiles.map(p => {
+    const counts = p.playerPickCounts instanceof Map
+      ? Object.fromEntries(p.playerPickCounts)
+      : (p.playerPickCounts || {});
+
+    const favoriteDraftClassPlayers = Object.entries(counts)
+      .filter(([pid]) => classPlayerMap[pid])
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 6)
+      .map(([pid, timesDrafted]) => {
+        const cp = classPlayerMap[pid];
+        return { name: cp.name, position: cp.position, team: cp.team || null, timesDrafted };
+      });
+
+    return { ...p, favoriteDraftClassPlayers };
+  });
 }
 
 /**
@@ -212,5 +272,5 @@ async function learnFromUserLeagues(userId, leagueIds) {
   };
 }
 
-module.exports = { ingestDraft, learnFromUserLeagues, generateScoutingNotes };
+module.exports = { ingestDraft, learnFromUserLeagues, generateScoutingNotes, enrichProfilesWithDraftClass };
 
