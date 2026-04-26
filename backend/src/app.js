@@ -8,6 +8,7 @@ const leaguesRoutes = require('./routes/leagues');
 const playersRoutes = require('./routes/players');
 const draftRoutes = require('./routes/draft');
 const tradehubRoutes = require('./routes/tradehub');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use('/api/leagues', leaguesRoutes);
 app.use('/api/players', playersRoutes);
 app.use('/api/draft', draftRoutes);
 app.use('/api/tradehub', tradehubRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));

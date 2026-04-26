@@ -37,4 +37,9 @@ export const getScoutingReport = (draftId, managerId) => api.get(`/draft/${draft
 // Trade Hub
 export const getTradeHubSuggestions = () => api.get('/tradehub').then(r => r.data);
 
+// Admin
+export const getDataStatus = () => api.get('/admin/data-status').then(r => r.data);
+export const refreshRankings = () => api.post('/admin/refresh/rankings').then(r => r.data);
+export const refreshDepthCharts = () => api.post('/admin/refresh/depth-charts').then(r => r.data);
+
 export default api;
