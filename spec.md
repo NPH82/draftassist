@@ -6,6 +6,30 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 
 ---
 
+## Implementation Status
+
+**Fully implemented and deployed as of April 26, 2026.**
+
+| Layer | Status | URL |
+|---|---|---|
+| Frontend (React PWA) | Live | https://draftassist-chi.vercel.app |
+| Backend (Node/Express) | Live | https://draftassist.onrender.com |
+| Database (MongoDB Atlas) | Live | M0 free tier cluster |
+
+### Key Post-Spec Changes Made During Build
+
+- **`vite-plugin-pwa`** upgraded from `0.19.8` → `^1.2.0` to support Vite 6; `serialize-javascript` pinned via `overrides` to `>=7.0.5` to fix two high CVEs (GHSA-5c6j-r48x-rmvq, GHSA-qj8w-gfj5-8c6v)
+- **GitHub Actions CI** added (`.github/workflows/audit.yml`): runs `npm audit --audit-level=high` and `npm run build` on every push/PR to `main` for both backend and frontend
+- **`frontend/vercel.json`** created inside the `frontend/` directory (Vercel reads config relative to Root Directory); rewrites `/api/*` to Render and all other paths to `index.html` for React Router
+- **Admin routes** (`/api/admin/*`) added: manual scraper trigger endpoints and data freshness status, protected by `requireAuth`
+- **Dashboard data panel** added: shows per-source last-updated timestamps (FantasyPros, KTC, Underdog) and a **Refresh Rankings Now** button to trigger scrapers on-demand without waiting for the 3am cron
+- **`.gitattributes`** added with `* text=auto eol=lf` to normalize all line endings to LF in the repository
+- **Win Window labels** confirmed as: Rebuilding (score 0–24), Transitioning (25–49), Contending (50–74), Win Now (75–100) -- based on avg roster age, KTC value, established-starter ratio, and future-picks penalty
+- **Render free tier note**: instances spin down after 15 min; first request after sleep takes ~30s. `FRONTEND_URL` env var must be set to the Vercel URL to pass CORS. `MONGODB_URI` must be set manually (not synced from render.yaml). Atlas Network Access must allow `0.0.0.0/0` due to Render's dynamic IPs.
+- **Seed data**: 48 2025 rookies pre-loaded in `backend/data/rookieSeed.json` as starting point; scrapers merge live data on top once source sites publish post-draft dynasty rankings (typically within days of the NFL Draft)
+
+---
+
 ## Core Fantasy Football Principles (Scoring Engine Inputs)
 
 The app's recommendations are grounded in the following positional evaluation criteria:
