@@ -15,6 +15,7 @@ const {
   scoreDraftFit,
 } = require('../services/winWindowService');
 const { generateBuySellAlerts } = require('../services/alertService');
+const { calcPersonalRankScore } = require('../services/scoringEngine');
 const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
@@ -302,7 +303,7 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
       ? await resolveDraftClassYear({ requestedYear: req.query.classYear, draftData, league })
       : null;
     const playerFilter = isRookieDraft ? { nflDraftYear: draftSeason } : {};
-    const allPlayers = await Player.find(playerFilter).sort({ dasScore: -1 }).lean();
+    const allPlayers = await Player.find(playerFilter).sort({ personalRank: 1, dasScore: -1 }).lean();
     const teamContextPlayers = await Player.find({ position: { $in: ['QB', 'RB', 'WR', 'TE'] } })
       .select('team position ktcValue fantasyProsRank')
       .lean();
@@ -377,19 +378,29 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
         return adpRank >= pickNumber;
       });
 
-      // Primary sort: positional need then DAS (team need mode)
+      // Primary sort: positional need then blended score (personal rank + DAS + fit)
       const byTeamNeed = available.slice().sort((a, b) => {
         const aNeed = needOrder[positionalNeeds[a.position] || 'low'];
         const bNeed = needOrder[positionalNeeds[b.position] || 'low'];
         if (aNeed !== bNeed) return aNeed - bNeed;
 
-        const aScore = (a.dasScore || 0) + scoreDraftFit(a, rosterComposition, teamContext);
-        const bScore = (b.dasScore || 0) + scoreDraftFit(b, rosterComposition, teamContext);
+        const aPersonal = calcPersonalRankScore(a.personalRank);
+        const bPersonal = calcPersonalRankScore(b.personalRank);
+        const aBase = aPersonal != null ? (a.dasScore || 0) * 0.4 + aPersonal * 0.6 : (a.dasScore || 0);
+        const bBase = bPersonal != null ? (b.dasScore || 0) * 0.4 + bPersonal * 0.6 : (b.dasScore || 0);
+        const aScore = aBase + scoreDraftFit(a, rosterComposition, teamContext);
+        const bScore = bBase + scoreDraftFit(b, rosterComposition, teamContext);
         return bScore - aScore;
       });
 
-      // BPA sort for alternatives
-      const byDas = available.slice().sort((a, b) => (b.dasScore || 0) - (a.dasScore || 0));
+      // BPA sort for alternatives — also blends personal rank
+      const byDas = available.slice().sort((a, b) => {
+        const aPersonal = calcPersonalRankScore(a.personalRank);
+        const bPersonal = calcPersonalRankScore(b.personalRank);
+        const aScore = aPersonal != null ? (a.dasScore || 0) * 0.4 + aPersonal * 0.6 : (a.dasScore || 0);
+        const bScore = bPersonal != null ? (b.dasScore || 0) * 0.4 + bPersonal * 0.6 : (b.dasScore || 0);
+        return bScore - aScore;
+      });
 
       const recommendation = byTeamNeed[0] || null;
       const recId = recommendation ? String(recommendation._id) : null;

@@ -9,7 +9,6 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { calculateDAS, detectValueGap } = require('../services/scoringEngine');
 const Player = require('../models/Player');
-
 // GET /api/players -- full player board
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -63,8 +62,7 @@ router.post('/recalculate-scores', requireAuth, async (req, res) => {
 });
 
 // POST /api/players/import -- manual CSV/JSON import fallback
-router.post('/import', requireAuth, async (req, res) => {
-  try {
+router.post('/import', requireAuth, async (req, res) => {  try {
     const { players: incoming } = req.body;
     if (!Array.isArray(incoming)) return res.status(400).json({ error: 'players array required' });
 
@@ -81,6 +79,54 @@ router.post('/import', requireAuth, async (req, res) => {
     }
 
     res.json({ upserted });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/players/personal-ranks
+ * Bulk-set your personal rankings for the upcoming draft.
+ * Body: array of { name, position, rank } or { sleeperId, rank }.
+ * Pass rank: null to clear a player's personal rank.
+ *
+ * Example:
+ *   [{ "name": "Carnell Tate", "position": "WR", "rank": 1 },
+ *    { "name": "Jeremiyah Love", "position": "RB", "rank": 2 }]
+ */
+router.patch('/personal-ranks', requireAuth, async (req, res) => {
+  try {
+    const { rankings } = req.body;
+    if (!Array.isArray(rankings) || rankings.length === 0) {
+      return res.status(400).json({ error: 'rankings array required' });
+    }
+
+    let updated = 0;
+    const errors = [];
+
+    for (const entry of rankings) {
+      const rank = entry.rank != null ? parseInt(entry.rank, 10) : null;
+      if (rank !== null && (!Number.isFinite(rank) || rank < 1)) {
+        errors.push({ entry, reason: 'rank must be a positive integer or null' });
+        continue;
+      }
+
+      let filter;
+      if (entry.sleeperId) {
+        filter = { sleeperId: entry.sleeperId };
+      } else if (entry.name && entry.position) {
+        filter = { name: entry.name, position: entry.position.toUpperCase() };
+      } else {
+        errors.push({ entry, reason: 'sleeperId or name+position required' });
+        continue;
+      }
+
+      const result = await Player.updateOne(filter, { $set: { personalRank: rank } });
+      if (result.matchedCount > 0) updated++;
+      else errors.push({ entry, reason: 'player not found' });
+    }
+
+    res.json({ updated, errors });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

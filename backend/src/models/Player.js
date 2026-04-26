@@ -53,6 +53,9 @@ const playerSchema = new mongoose.Schema({
   ktcRank: Number,
   underdogAdp: Number,
 
+  // Manager's personal ranking (1 = top pick). Overrides algorithmic sort when set.
+  personalRank: { type: Number, default: null },
+
   // Draft Assistant Score
   dasScore: Number,
   dasBreakdown: {

@@ -290,4 +290,17 @@ function detectValueGap(player) {
   };
 }
 
-module.exports = { calculateDAS, detectValueGap };
+// ── Personal rank scoring ─────────────────────────────────────────────────────
+
+/**
+ * Converts a manager's personal player rank to a 0–100 score so it can be
+ * blended with dasScore on the same scale.
+ * Rank 1 → 98, linear decay of 2 pts per rank position, rank 50+ → 0.
+ * Returns null when personalRank is not set (signals "use DAS only").
+ */
+function calcPersonalRankScore(rank) {
+  if (rank == null) return null;
+  return Math.max(0, 100 - (rank - 1) * 2);
+}
+
+module.exports = { calculateDAS, detectValueGap, calcPersonalRankScore };

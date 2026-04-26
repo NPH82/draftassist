@@ -8,7 +8,7 @@ const router = express.Router();
 
 const sleeperService = require('../services/sleeperService');
 const { requireAuth } = require('../middleware/auth');
-const { detectValueGap } = require('../services/scoringEngine');
+const { detectValueGap, calcPersonalRankScore } = require('../services/scoringEngine');
 const { predictAvailability, detectFallers } = require('../services/availabilityPredictor');
 const { suggestTradeUp, suggestTradeDown } = require('../services/tradeEngine');
 const { enrichProfilesWithDraftClass } = require('../services/learningEngine');
@@ -197,7 +197,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       ? await resolveDraftClassYear({ requestedYear: req.query.classYear, draftData, league: league || {} })
       : null;
     const playerFilter = isRookieDraft ? { nflDraftYear: draftSeason } : {};
-    const allPlayers = await Player.find(playerFilter).sort({ dasScore: -1 }).lean();
+    const allPlayers = await Player.find(playerFilter).sort({ personalRank: 1, dasScore: -1 }).lean();
     const teamContextPlayers = await Player.find({ position: { $in: ['QB', 'RB', 'WR', 'TE'] } })
       .select('team position ktcValue fantasyProsRank')
       .lean();
@@ -258,8 +258,12 @@ router.get('/:draftId', requireAuth, async (req, res) => {
         const bNeed = needOrder[positionalNeeds[b.position] || 'low'];
         if (aNeed !== bNeed) return aNeed - bNeed;
 
-        const aScore = (a.dasScore || 0) + scoreDraftFit(a, rosterComposition, teamContext);
-        const bScore = (b.dasScore || 0) + scoreDraftFit(b, rosterComposition, teamContext);
+        const aPersonal = calcPersonalRankScore(a.personalRank);
+        const bPersonal = calcPersonalRankScore(b.personalRank);
+        const aBase = aPersonal != null ? (a.dasScore || 0) * 0.4 + aPersonal * 0.6 : (a.dasScore || 0);
+        const bBase = bPersonal != null ? (b.dasScore || 0) * 0.4 + bPersonal * 0.6 : (b.dasScore || 0);
+        const aScore = aBase + scoreDraftFit(a, rosterComposition, teamContext);
+        const bScore = bBase + scoreDraftFit(b, rosterComposition, teamContext);
         return bScore - aScore;
       });
     }
