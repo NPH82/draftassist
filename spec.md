@@ -48,6 +48,16 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **32-team league exclusion for draft recommendations**: draft recommendation endpoints skip/disable recommendations for leagues with 32 teams, while preserving league/manager scouting data for analysis
 - **Scouting Hub UX overhaul**: scouting now supports (a) global manager search, (b) selected-league-only search/filtering, and (c) league dropdown scoping that shows only managers from that league. Default view no longer dumps all leaguemates; data is still prefetched for fast filtering
 - **Manager identity mapping fixed**: manager display names are now primary, with team names shown separately (important for emoji-heavy/custom team names). League-scoped scouting returns all league managers even if a manager has no saved `ManagerProfile` yet
+- **Trade engine rebuilt — `tradeEngine.js`**: Full rewrite of trade-up/trade-down suggestion logic. `buildTradeUpPackages()` and `buildTradeDownPackages()` now generate concrete package options (up to 3 per suggestion) with individual assets tagged as picks or players. Up to 2 assets per side. Each package includes a `fairness` label (`fair` / `slight-favour-them` / `aggressive`) and `overpayPct` percentage so the user knows exactly how lopsided an offer is before sending it
+- **Dual-scale trade values — FP + KTC**: All assets (picks and players) in every trade package carry both `fpValue` (FantasyPros scale, 0–100) and `ktcValue` (KeepTradeCut scale, 0–10000). A consensus FP value is computed as a weighted average (55% FP + 45% KTC-normalized) when both sources are present; falls back to whichever is available. Players with only `fantasyProsValue` (no `ktcValue`) are no longer excluded from tradeable player lists
+- **FP-calibrated pick value curve**: `fpPickValue(overallPick)` anchored to April 2026 FantasyPros Dynasty Trade Value Chart (1.01 = 68 FP, 1.03 = 58 FP, user-confirmed). Future pick labels keyed to FP gap needed (e.g. gap ≥ 20 FP → "2027 1st (Late)"). `pickKtcValue()` converts FP pick values to KTC scale for display. `estimatePickValue()` kept as a KTC-scale alias for scoring engine / availability predictor compatibility
+- **Proportionate player candidates in trade-up packages**: player candidates are now range-filtered to `[60%, 150%]` of the gap value (`neededToAdd`). This prevents over-suggesting a high-value player (e.g. 30 FP) to bridge a small gap (10 FP), which was causing nonsensical packages like "Aaron Jones + Jalen Wright + 1.03 for the 1.01"
+- **Near-even trade-up threshold raised**: gaps ≤ 5 FP (~1 pick spot) now return a "Straight Swap" package rather than requiring the user to add a player or future pick. Trade-down straight-swap threshold raised to ≤ 6 FP
+- **Trade-up overpay premium reduced**: from 12% → 10% premium applied when moving up. Trade-down requests 88% of surplus back (unchanged)
+- **`TradePanel.jsx` redesigned**: expandable `TradeUpCard` / `TradeDownCard` components with `PickValueBar` (shows both FP and KTC for each pick), `PackageOption` rows (give/receive asset pills, fairness badge, overpay %), and `AssetTag` pills showing `"21 FP / 2,940 KTC"` for players or `"58 FP / 8,097 KTC"` for picks
+- **`HintTradeCard` in `DraftMode.jsx`**: strategy hint banner now renders expandable trade cards with pick value bars and package options instead of plain text reason strings
+- **BPA stale closure fix in `DraftContext.jsx`**: `fetchState` callback no longer depends on `queue` (removed from `useCallback` deps). Queue updates use functional `setQueue(q => ...)`. `useEffect` deps changed to `[fetchState]` so mode changes trigger an immediate re-fetch and interval restart
+- **Trade direction gate removed**: `/api/draft/:id/trades` route previously only called `suggestTradeUp` when `marketRank < myNextPickNumber`. Gate removed — trade-up always runs; `suggestTradeUp()` itself correctly filters to managers picking before the user
 
 ---
 
@@ -327,13 +337,21 @@ The starting dynasty board is seeded from a Claude-generated Top 48 dynasty rook
 - When a target player risks being taken before the user's pick: suggests a **trade-up**
 - When a target player is projected to still be available later: suggests a **trade-down**
 - Each suggestion names a **specific manager** to target, based on their roster needs and tendency profile
-- Suggests an **acceptable value package** including players and/or picks (current-year and future picks)
-- Assesses trade fairness for **both sides** using KTC and FantasyPros values to maximize acceptance probability
+- Suggests up to **3 concrete package options** per suggestion, each with max 2 assets per side:
+  - **Positional-fit player**: player from user's roster that fills the other manager's biggest positional need (highest acceptance chance)
+  - **Best-value player**: player closest in FP value to the required sweetener (within 60–150% of the gap)
+  - **Future pick**: capital-only offer (e.g. "1.03 + 2027 1st (Late)") — no roster disruption
+- Straight swap offered when the gap is ≤ 5 FP (~1 pick spot) for trade-ups, ≤ 6 FP for trade-downs
+- Each package shows a **fairness label** (`Fair value` / `~X% over fair` / `~X% over fair — aggressive`) and the exact overpay percentage
+- **Trade-up premium**: 10% overpay applied (moving up costs slightly more than fair value to incentivize the deal)
+- **Trade-down return**: requests 88% of the surplus pick value back
+- All asset values displayed in both FP scale and KTC scale (e.g. "1.03 — 58 FP / 8,097 KTC")
 
 ### Trade Value Reference
-- Primary: [FantasyPros Dynasty Trade Value Chart](https://www.fantasypros.com/2026/03/fantasy-football-rankings-dynasty-trade-value-chart-APRIL-2026-update/)
-- Secondary: [KeepTradeCut Dynasty Rankings](https://keeptradecut.com/dynasty-rankings)
-- Multi-year pick valuation supported (e.g., 2027 1st, 2028 2nd)
+- Primary: [FantasyPros Dynasty Trade Value Chart](https://www.fantasypros.com/2026/03/fantasy-football-rankings-dynasty-trade-value-chart-APRIL-2026-update/) — FP scale (0–100), April 2026 anchors: 1.01 = 68, 1.03 = 58
+- Secondary: [KeepTradeCut Dynasty Rankings](https://keeptradecut.com/dynasty-rankings) — KTC scale (0–10000), normalized to FP via ÷140 factor (9500 KTC ≈ 68 FP)
+- When both sources are present, **consensus value** = 55% FP + 45% KTC-normalized
+- Multi-year pick valuation supported (e.g., 2027 1st (Early) = 46 FP, 2027 1st (Late) = 23 FP)
 - Value gaps between FantasyPros and KTC are flagged as trade exploitation opportunities
 
 ---

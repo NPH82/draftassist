@@ -100,8 +100,9 @@ export default function TradePanel({ player, draftId, onClose }) {
 
 /* ── Trade-Up Card ────────────────────────────────────────────────────────── */
 function TradeUpCard({ suggestion, myPickLabel }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const { pickComparison, packages = [], targetManager, reason } = suggestion;
+  const firstPkg = packages[0];
 
   return (
     <div style={{ background: 'var(--bg-primary)', borderRadius: 8, marginBottom: '0.6rem', border: '1px solid var(--border)', overflow: 'hidden' }}>
@@ -131,7 +132,7 @@ function TradeUpCard({ suggestion, myPickLabel }) {
             <strong style={{ color: 'var(--yellow)' }}>
               {pickComparison.rawGap.toFixed(1)} FP
             </strong>
-            {' '}· need to add (12% premium):{' '}
+            {' '}· need to add (10% premium):{' '}
             <strong style={{ color: 'var(--orange, #f59e0b)' }}>
               ~{pickComparison.neededToAdd.toFixed(1)} FP
             </strong>
@@ -142,17 +143,36 @@ function TradeUpCard({ suggestion, myPickLabel }) {
             They need: <strong style={{ color: 'var(--text-secondary)' }}>{pickComparison.theirPositionalNeed}</strong>
           </div>
         )}
+
+        {/* Best package preview shown even when collapsed */}
+        {!expanded && firstPkg && (
+          <div style={{ marginTop: '0.35rem', fontSize: '0.71rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.2rem', alignItems: 'center' }}>
+            <span style={{ color: 'var(--red, #ef4444)', fontWeight: 600 }}>
+              {(firstPkg.giving || []).map(a => a.label).join(' + ')}
+            </span>
+            <span>→</span>
+            <span style={{ color: 'var(--green)', fontWeight: 600 }}>
+              {(firstPkg.receiving || []).map(a => a.label).join(' + ')}
+            </span>
+          </div>
+        )}
       </button>
 
       {/* Package Options */}
-      {expanded && packages.length > 0 && (
+      {expanded && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '0.6rem 0.75rem' }}>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Package Options
-          </div>
-          {packages.map((pkg, i) => (
-            <PackageOption key={i} pkg={pkg} direction="up" />
-          ))}
+          {packages.length > 0 ? (
+            <>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Package Options
+              </div>
+              {packages.map((pkg, i) => (
+                <PackageOption key={i} pkg={pkg} direction="up" />
+              ))}
+            </>
+          ) : (
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>No package options available — insufficient roster value data.</div>
+          )}
         </div>
       )}
     </div>
@@ -161,8 +181,81 @@ function TradeUpCard({ suggestion, myPickLabel }) {
 
 /* ── Trade-Down Card ──────────────────────────────────────────────────────── */
 function TradeDownCard({ suggestion, myPickLabel }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const { pickComparison, packages = [], targetManager, safeZone, exploratory } = suggestion;
+  const firstPkg = packages[0];
+
+  return (
+    <div style={{ background: 'var(--bg-primary)', borderRadius: 8, marginBottom: '0.6rem', border: `1px solid ${safeZone ? 'var(--yellow)' : 'var(--border)'}`, overflow: 'hidden', opacity: exploratory ? 0.85 : 1 }}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        style={{ width: '100%', textAlign: 'left', padding: '0.6rem 0.75rem', background: 'transparent', border: 'none', cursor: 'pointer' }}
+      >
+        <div className="flex justify-between items-center">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              {targetManager?.username || 'Unknown Manager'}
+            </span>
+            {safeZone && <span style={{ fontSize: '0.65rem', background: 'var(--yellow)', color: '#000', borderRadius: 4, padding: '0.1rem 0.35rem', fontWeight: 700 }}>SAFE</span>}
+            {exploratory && <span style={{ fontSize: '0.65rem', background: 'var(--border)', color: 'var(--text-muted)', borderRadius: 4, padding: '0.1rem 0.35rem' }}>RISKY</span>}
+          </div>
+          <span style={{ fontSize: '0.72rem', color: 'var(--yellow)' }}>{expanded ? '▲' : '▼'}</span>
+        </div>
+
+        {pickComparison && (
+          <PickValueBar
+            ourPick={pickComparison.ourPick}
+            theirPick={pickComparison.theirPick}
+            direction="down"
+          />
+        )}
+
+        {pickComparison?.rawSurplus > 0 && (
+          <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+            Your surplus:{' '}
+            <strong style={{ color: 'var(--green)' }}>
+              {pickComparison.rawSurplus.toFixed(1)} FP
+            </strong>
+            {' '}· asking back (88%):{' '}
+            <strong style={{ color: 'var(--green)' }}>
+              ~{pickComparison.requestBack.toFixed(1)} FP
+            </strong>
+          </div>
+        )}
+
+        {/* Best package preview when collapsed */}
+        {!expanded && firstPkg && (
+          <div style={{ marginTop: '0.35rem', fontSize: '0.71rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.2rem', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+              {(firstPkg.giving || []).map(a => a.label).join(' + ')}
+            </span>
+            <span>→</span>
+            <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>
+              {(firstPkg.receiving || []).map(a => a.label).join(' + ')}
+            </span>
+          </div>
+        )}
+      </button>
+
+      {expanded && (
+        <div style={{ borderTop: '1px solid var(--border)', padding: '0.6rem 0.75rem' }}>
+          {packages.length > 0 ? (
+            <>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Package Options
+              </div>
+              {packages.map((pkg, i) => (
+                <PackageOption key={i} pkg={pkg} direction="down" />
+              ))}
+            </>
+          ) : (
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>No package options available — insufficient roster value data.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
   return (
     <div style={{ background: 'var(--bg-primary)', borderRadius: 8, marginBottom: '0.6rem', border: `1px solid ${safeZone ? 'var(--yellow)' : 'var(--border)'}`, overflow: 'hidden', opacity: exploratory ? 0.85 : 1 }}>

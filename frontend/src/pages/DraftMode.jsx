@@ -321,11 +321,98 @@ function DraftModeInner({ draftId }) {
 
 /* ── Compact trade card shown inside the strategy hint panel ─────────────── */
 function HintTradeCard({ suggestion, direction }) {
-  const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const isUp = direction === 'up';
   const accentColor = isUp ? 'var(--green)' : 'var(--yellow)';
   const manager = suggestion.targetManager?.username || 'Unknown';
   const cmp = suggestion.pickComparison;
+  const packages = suggestion.packages || [];
+  const visiblePkgs = showAll ? packages : packages.slice(0, 1);
+
+  const ourFp   = cmp?.ourPick?.fpValue  || 0;
+  const theirFp = cmp?.theirPick?.fpValue || 0;
+  const maxFp   = Math.max(ourFp, theirFp, 1);
+
+  return (
+    <div style={{ background: 'var(--bg-primary)', borderRadius: 7, border: `1px solid var(--border)`, marginBottom: '0.35rem', padding: '0.45rem 0.6rem' }}>
+      {/* Manager + pick direction */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+        <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>{manager}</span>
+        {cmp && (
+          <span style={{ fontSize: '0.68rem', color: accentColor }}>
+            {cmp.ourPick?.label} → {cmp.theirPick?.label}
+          </span>
+        )}
+      </div>
+
+      {/* FP value bar */}
+      {cmp && (
+        <div style={{ marginBottom: '0.3rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: '0.08rem' }}>
+            <span>{cmp.ourPick?.label} — {ourFp} FP</span>
+            <span>{cmp.theirPick?.label} — {theirFp} FP</span>
+          </div>
+          <div style={{ display: 'flex', gap: 3, height: 4, borderRadius: 3, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
+            <div style={{ width: `${(ourFp / maxFp) * 100}%`, background: 'var(--text-muted)', borderRadius: 3 }} />
+            <div style={{ width: `${(theirFp / maxFp) * 100}%`, background: accentColor, borderRadius: 3 }} />
+          </div>
+          {isUp && cmp.neededToAdd > 0 && (
+            <div style={{ fontSize: '0.63rem', color: 'var(--text-muted)', marginTop: '0.12rem' }}>
+              Gap: {cmp.rawGap?.toFixed(1)} FP · add ~{cmp.neededToAdd?.toFixed(1)} FP (10% premium)
+              {cmp.theirPositionalNeed && <> · they need <strong style={{ color: 'var(--text-secondary)' }}>{cmp.theirPositionalNeed}</strong></>}
+            </div>
+          )}
+          {!isUp && cmp.rawSurplus > 0 && (
+            <div style={{ fontSize: '0.63rem', color: 'var(--text-muted)', marginTop: '0.12rem' }}>
+              You drop {cmp.rawSurplus?.toFixed(1)} FP · ask back ~{cmp.requestBack?.toFixed(1)} FP
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Package options — always visible, no expand click needed */}
+      {visiblePkgs.map((pkg, i) => (
+        <div key={i} style={{ background: 'var(--bg-secondary)', borderRadius: 5, padding: '0.35rem 0.5rem', marginBottom: '0.2rem', border: pkg.positionalFit ? `1px solid ${accentColor}44` : '1px solid transparent' }}>
+          {pkg.positionalFit && (
+            <div style={{ fontSize: '0.6rem', color: 'var(--green)', fontWeight: 700, marginBottom: '0.08rem' }}>✓ POSITIONAL FIT</div>
+          )}
+          <div style={{ fontSize: '0.71rem', marginBottom: '0.12rem' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Give: </span>
+            {(pkg.giving || []).map((a, j) => (
+              <span key={j} style={{ color: isUp ? 'var(--red, #ef4444)' : 'var(--text-primary)', fontWeight: 600, marginRight: '0.3rem' }}>
+                {a.position && <span style={{ opacity: 0.65, fontWeight: 400 }}>{a.position} </span>}{a.label}
+                {a.fpValue > 0 && <span style={{ opacity: 0.5, fontWeight: 400, fontSize: '0.63rem' }}> ({a.fpValue} FP)</span>}
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: '0.71rem' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Get: </span>
+            {(pkg.receiving || []).map((a, j) => (
+              <span key={j} style={{ color: accentColor, fontWeight: 600, marginRight: '0.3rem' }}>
+                {a.label}
+                {a.fpValue > 0 && <span style={{ opacity: 0.5, fontWeight: 400, fontSize: '0.63rem' }}> ({a.fpValue} FP)</span>}
+              </span>
+            ))}
+          </div>
+          {pkg.fairness && (
+            <div style={{ fontSize: '0.62rem', marginTop: '0.1rem', color: pkg.fairness === 'fair' ? 'var(--green)' : pkg.fairness === 'aggressive' ? 'var(--red,#ef4444)' : 'var(--yellow)' }}>
+              {pkg.fairness === 'fair' ? 'Fair value' : `~${pkg.overpayPct}% over fair${pkg.fairness === 'aggressive' ? ' — aggressive' : ''}`}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {packages.length > 1 && (
+        <button
+          onClick={() => setShowAll(s => !s)}
+          style={{ fontSize: '0.64rem', color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '0.05rem 0', marginTop: '0.05rem' }}
+        >
+          {showAll ? '▴ Show less' : `▾ ${packages.length - 1} more option${packages.length > 2 ? 's' : ''}`}
+        </button>
+      )}
+    </div>
+  );
+}
 
   return (
     <div style={{ background: 'var(--bg-primary)', borderRadius: 7, border: `1px solid var(--border)`, marginBottom: '0.35rem', overflow: 'hidden' }}>
