@@ -546,6 +546,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
     res.json({
       draftId,
       leagueId: league?.sleeperId || null,
+      leagueName: league?.name || draftData.metadata?.name || null,
       status: draftData.status,
       currentPick: currentOverallPick,
       myNextPick: myNextPickNumber,
@@ -590,10 +591,21 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
     const playerMap = Object.fromEntries(allPlayers.map(p => [p.sleeperId, p]));
 
     const league = await League.findOne({ draftId }).lean();
-    const allRosters = (league?.rosters || []).map(r => ({
-      ...r,
-      nextPickNumber: myNextPickNumber - picksUntilMe + 1,
-    }));
+    const nextPickForSlot = (slot) => {
+      if (!slot) return null;
+      const distance = slot >= currentSlot
+        ? (slot - currentSlot)
+        : (totalRosters - currentSlot + slot);
+      return picksMade + distance + 1;
+    };
+
+    const allRosters = (league?.rosters || []).map(r => {
+      const slot = draftData.draft_order?.[r.ownerId];
+      return {
+        ...r,
+        nextPickNumber: nextPickForSlot(slot),
+      };
+    });
 
     // Trade-up: only when the target is genuinely at risk of being stolen before our pick
     // (high availability prob = others will grab them). Trade-down: when they'll fall past us.

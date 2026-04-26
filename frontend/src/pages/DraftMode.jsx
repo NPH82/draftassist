@@ -72,6 +72,15 @@ function DraftModeInner({ draftId }) {
       <div style={{ marginBottom: '1rem' }}>
         <div className="flex justify-between items-center" style={{ marginBottom: '0.5rem' }}>
           <div>
+            {ds?.leagueName && (
+              <div
+                className="league-title"
+                aria-label={`League ${ds.leagueName}`}
+                style={{ fontSize: '1rem', marginBottom: '0.25rem' }}
+              >
+                {ds.leagueName}
+              </div>
+            )}
             <div className="font-bold" style={{ fontSize: '1.1rem' }}>
               {ds?.onTheClock
                 ? <span className="text-green">On the Clock!</span>
@@ -183,6 +192,37 @@ function DraftModeInner({ draftId }) {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Always-visible top recommendations */}
+      {ds?.recommended?.length > 0 && (
+        <div
+          className="card"
+          style={{ marginBottom: '1rem', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}
+        >
+          <div className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
+            Top live recommendations
+          </div>
+          {ds.recommended.slice(0, 3).map((p, idx) => {
+            const id = p.sleeperId || p._id?.toString();
+            return (
+              <button
+                key={id || idx}
+                className="btn btn-secondary"
+                style={{ justifyContent: 'space-between', width: '100%', padding: '0.45rem 0.6rem' }}
+                onClick={() => setActiveTradePlayer(p)}
+                aria-label={`View recommendation details for ${p.name}`}
+              >
+                <span style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {idx + 1}. {p.name} ({p.position})
+                </span>
+                <span className="text-xs text-muted" style={{ marginLeft: '0.5rem' }}>
+                  DAS {p.dasScore ?? '--'}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 

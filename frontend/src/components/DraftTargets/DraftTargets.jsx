@@ -101,10 +101,11 @@ function PickTargetCard({ pick, leagueId, draftId, onFeedbackSaved }) {
 
   const handleLoadTrades = async () => {
     if (trades) { setTrades(null); return; } // toggle off
-    if (!draftId || !pick.recommendation?.sleeperId) return;
+    const playerId = pick.recommendation?.sleeperId || String(pick.recommendation?._id || '');
+    if (!draftId || !playerId) return;
     setLoadingTrades(true);
     try {
-      const data = await getDraftTrades(draftId, pick.recommendation.sleeperId);
+      const data = await getDraftTrades(draftId, playerId);
       setTrades(data);
     } catch {
       setTrades({ tradeUp: [], tradeDown: [] });
@@ -311,9 +312,7 @@ function PickTargetCard({ pick, leagueId, draftId, onFeedbackSaved }) {
                     </div>
                   )}
                   {trades.tradeUp?.length === 0 && trades.tradeDown?.length === 0 && (
-                    <div className="text-xs text-muted">
-                      No trade opportunities found. Full trade analysis available during live draft.
-                    </div>
+                    <div className="text-xs text-muted">No trade opportunities found for this target at the current board state.</div>
                   )}
                 </div>
               )}
