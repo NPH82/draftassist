@@ -249,11 +249,23 @@ function PackageOption({ pkg, direction }) {
   const giveColor    = isUp ? 'var(--red, #ef4444)'   : 'var(--text-primary)';
   const receiveColor = isUp ? 'var(--green, #22c55e)' : 'var(--yellow, #eab308)';
 
+  const fairnessConfig = {
+    'fair':               { label: 'Fair value', color: 'var(--green)' },
+    'slight-favour-them': { label: `~${pkg.overpayPct || 0}% over fair`, color: 'var(--yellow, #eab308)' },
+    'aggressive':         { label: `~${pkg.overpayPct || 0}% over fair — aggressive`, color: 'var(--red, #ef4444)' },
+  };
+  const fairness = pkg.fairness ? fairnessConfig[pkg.fairness] : null;
+
   return (
     <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '0.5rem 0.6rem', marginBottom: '0.35rem', border: pkg.positionalFit ? '1px solid var(--green, #22c55e)' : '1px solid transparent' }}>
-      {pkg.positionalFit && (
-        <div style={{ fontSize: '0.65rem', color: 'var(--green)', fontWeight: 700, marginBottom: '0.2rem' }}>✓ POSITIONAL FIT</div>
-      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem' }}>
+        {pkg.positionalFit && (
+          <div style={{ fontSize: '0.65rem', color: 'var(--green)', fontWeight: 700 }}>✓ POSITIONAL FIT</div>
+        )}
+        {fairness && (
+          <div style={{ fontSize: '0.63rem', color: fairness.color, marginLeft: 'auto' }}>{fairness.label}</div>
+        )}
+      </div>
 
       {/* Give side */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.3rem', marginBottom: '0.2rem' }}>
