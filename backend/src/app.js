@@ -36,11 +36,14 @@ app.use(cors({
 app.use(express.json({ limit: '2mb' }));
 
 // Global rate limiter: 200 req/15min per IP
+// keyGenerator uses req.ip (correctly populated via 'trust proxy' 1 above),
+// which suppresses express-rate-limit's ERR_ERL_FORWARDED_HEADER validation.
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => req.ip,
 }));
 
 // Routes
