@@ -96,6 +96,78 @@ function buildTeamContext(players = []) {
   return ctx;
 }
 
+function marketRankSignal(player = {}, fallbackRank = 999) {
+  const adp = Number(player.underdogAdp || 0);
+  const fp = Number(player.fantasyProsRank || 0);
+  if (adp > 0) return adp;
+  if (fp > 0) return fp;
+  return fallbackRank;
+}
+
+function reachPenaltyFromMarket({ player, currentPick, needTier = 'low', reachDiscipline = 1, fallbackRank = 999 }) {
+  const marketRank = marketRankSignal(player, fallbackRank);
+  const gap = marketRank - currentPick; // positive means likely available after current slot
+  if (gap <= 4) return { penalty: 0, marketRank, gap };
+
+  let penalty = Math.min(24, (gap - 4) * 1.35);
+
+  // Preserve need-based flexibility.
+  if (needTier === 'high') penalty *= 0.55;
+  else if (needTier === 'medium') penalty *= 0.8;
+
+  penalty *= Math.max(0.8, Math.min(1.6, reachDiscipline || 1));
+  return { penalty: Math.round(penalty * 100) / 100, marketRank, gap };
+}
+
+async function estimateReachDiscipline(profile) {
+  const feedback = Array.isArray(profile?.targetFeedback) ? profile.targetFeedback : [];
+  const samples = feedback
+    .filter(f => f && f.agreed === false && f.recommendedPlayerId && f.preferredPlayerId)
+    .slice(-30);
+
+  if (samples.length < 4) return 1;
+
+  const ids = new Set();
+  for (const s of samples) {
+    ids.add(String(s.recommendedPlayerId));
+    ids.add(String(s.preferredPlayerId));
+  }
+
+  const idList = [...ids];
+  const objectIds = idList.filter(id => /^[a-f\d]{24}$/i.test(id));
+  const playerDocs = await Player.find({
+    $or: [
+      { sleeperId: { $in: idList } },
+      ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
+    ],
+  })
+    .select('_id sleeperId underdogAdp fantasyProsRank dasScore')
+    .lean();
+
+  const byAnyId = {};
+  for (const p of playerDocs) {
+    byAnyId[String(p._id)] = p;
+    if (p.sleeperId) byAnyId[String(p.sleeperId)] = p;
+  }
+
+  let preferenceForMarket = 0;
+  let valid = 0;
+
+  for (const s of samples) {
+    const rec = byAnyId[String(s.recommendedPlayerId)];
+    const pref = byAnyId[String(s.preferredPlayerId)];
+    if (!rec || !pref) continue;
+    const recRank = marketRankSignal(rec, rec.dasScore ? 200 - (rec.dasScore / 2) : 999);
+    const prefRank = marketRankSignal(pref, pref.dasScore ? 200 - (pref.dasScore / 2) : 999);
+    valid += 1;
+    if (prefRank + 4 < recRank) preferenceForMarket += 1;
+  }
+
+  if (!valid) return 1;
+  const ratio = preferenceForMarket / valid;
+  return 1 + (ratio * 0.5); // 1.0 to 1.5
+}
+
 // GET /api/leagues -- all leagues for logged-in user
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -386,6 +458,7 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
     for (const fb of (profile?.targetFeedback || [])) {
       if (fb.leagueId === leagueId) feedbackMap[fb.pickNumber] = fb;
     }
+    const reachDiscipline = await estimateReachDiscipline(profile);
 
     const myPicks = [];
     for (const { pickNumber, round, slotInRound } of myPickNumbers) {
@@ -400,33 +473,55 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
         return adpRank >= pickNumber;
       });
 
-      // Primary sort: positional need then blended score (personal rank + DAS + fit)
-      const byTeamNeed = available.slice().sort((a, b) => {
-        const aNeed = needOrder[positionalNeeds[a.position] || 'low'];
-        const bNeed = needOrder[positionalNeeds[b.position] || 'low'];
-        if (aNeed !== bNeed) return aNeed - bNeed;
+      const scored = available.map((p) => {
+        const needTier = positionalNeeds[p.position] || 'low';
+        const needValue = needOrder[needTier];
+        const fallbackRank = adpRankMap.get(String(p._id)) || 999;
+        const { penalty, marketRank, gap } = reachPenaltyFromMarket({
+          player: p,
+          currentPick: pickNumber,
+          needTier,
+          reachDiscipline,
+          fallbackRank,
+        });
 
-        const aPersonal = calcPersonalRankScore(a.personalRank);
-        const bPersonal = calcPersonalRankScore(b.personalRank);
-        const aBase = aPersonal != null ? (a.dasScore || 0) * 0.4 + aPersonal * 0.6 : (a.dasScore || 0);
-        const bBase = bPersonal != null ? (b.dasScore || 0) * 0.4 + bPersonal * 0.6 : (b.dasScore || 0);
-        const aScore = aBase + scoreDraftFit(a, rosterComposition, teamContext);
-        const bScore = bBase + scoreDraftFit(b, rosterComposition, teamContext);
-        return bScore - aScore;
+        const personal = calcPersonalRankScore(p.personalRank);
+        const base = personal != null ? (p.dasScore || 0) * 0.4 + personal * 0.6 : (p.dasScore || 0);
+        const fit = scoreDraftFit(p, rosterComposition, teamContext);
+        const recScore = base + fit - penalty;
+
+        return {
+          ...p,
+          needTier,
+          needValue,
+          marketRank,
+          marketReachGap: gap,
+          reachPenalty: penalty,
+          recScore,
+          tradeBackCandidate: gap >= 8 && needTier !== 'high',
+        };
       });
 
-      // BPA sort for alternatives — also blends personal rank
-      const byDas = available.slice().sort((a, b) => {
-        const aPersonal = calcPersonalRankScore(a.personalRank);
-        const bPersonal = calcPersonalRankScore(b.personalRank);
-        const aScore = aPersonal != null ? (a.dasScore || 0) * 0.4 + aPersonal * 0.6 : (a.dasScore || 0);
-        const bScore = bPersonal != null ? (b.dasScore || 0) * 0.4 + bPersonal * 0.6 : (b.dasScore || 0);
-        return bScore - aScore;
+      // Primary sort: positional need then reach-aware recommendation score.
+      const byTeamNeed = scored.slice().sort((a, b) => {
+        if (a.needValue !== b.needValue) return a.needValue - b.needValue;
+        return (b.recScore || 0) - (a.recScore || 0);
       });
+
+      // BPA alternatives use same reach-aware score to avoid obvious reaches.
+      const byDas = scored.slice().sort((a, b) => (b.recScore || 0) - (a.recScore || 0));
 
       const recommendation = byTeamNeed[0] || null;
       const recId = recommendation ? String(recommendation._id) : null;
       const alternatives = byDas.filter(p => String(p._id) !== recId).slice(0, 4);
+      const strategyHint = recommendation?.tradeBackCandidate
+        ? {
+            type: 'trade_back_or_pivot',
+            message: `${recommendation.name} projects later than pick ${pickNumber}. Trade back or pivot BPA.`,
+            marketRank: Math.round(recommendation.marketRank || pickNumber),
+            reachGap: Math.round(recommendation.marketReachGap || 0),
+          }
+        : null;
 
       myPicks.push({
         pickNumber,
@@ -434,6 +529,7 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
         pickInRound: slotInRound,
         recommendation: recommendation ? slimPlayer(recommendation) : null,
         alternatives: alternatives.map(slimPlayer),
+        strategyHint,
         feedback: feedbackMap[pickNumber] || null,
       });
     }
