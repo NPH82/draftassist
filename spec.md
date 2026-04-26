@@ -24,7 +24,7 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **Admin routes** (`/api/admin/*`) added: manual scraper trigger endpoints and data freshness status, protected by `requireAuth`
 - **Dashboard data panel** added: shows per-source last-updated timestamps (FantasyPros, KTC, Underdog) and a **Refresh Rankings Now** button to trigger scrapers on-demand without waiting for the 3am cron
 - **`.gitattributes`** added with `* text=auto eol=lf` to normalize all line endings to LF in the repository
-- **Win Window labels** confirmed as: Rebuilding (score 0–24), Transitioning (25–49), Contending (50–74), Win Now (75–100) -- based on avg roster age, KTC value, established-starter ratio, and future-picks penalty
+- **League-relative team outlook model** replaced the old single-team win-window bands. Labels now include: **Built To Win**, **Sustainable Contender**, **Contending**, **Aging Contender**, **Re-Tooling**, **Rebuilding**. Classification uses league-relative roster strength, last-season finish context (wins/losses/points-for when available), prime/aging mix, top-end market metrics, and positional weak points
 - **Render free tier note**: instances spin down after 15 min; first request after sleep takes ~30s. `FRONTEND_URL` env var must be set to the Vercel URL to pass CORS. `MONGODB_URI` must be set manually (not synced from render.yaml). Atlas Network Access must allow `0.0.0.0/0` due to Render's dynamic IPs.
 - **Seed data**: 48 2025 rookies pre-loaded in `backend/data/rookieSeed.json` as starting point; scrapers merge live data on top once source sites publish post-draft dynasty rankings (typically within days of the NFL Draft)
 - **Mongoose deprecation fixes**: All `findOneAndUpdate` calls updated from `{ new: true }` → `{ returnDocument: 'after' }` across `auth.js`, `leagues.js`, and `learningEngine.js` (×2) -- committed `08a0e17`
@@ -43,8 +43,11 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **PFR scraper expanded with college stats**: `pfrScraper.js` now exports `fetchCollegeReceivingStats(year)` and `fetchCollegeRushingStats(year)` in addition to combine data. Sources: sports-reference.com/cfb play-index (receiving: YPR, rec, recYds, TDs; rushing: YPC, rushAtt, rushYds). Filtered to players with 50+ targets / 50+ rush attempts to reduce noise
 - **Scoring engine updated for college data**: `scoringEngine.js` rookies (no NFL stats) now use `collegeYprr` → `collegeYardsPerRec` → draft capital fallback chain for WR/TE production score. RBs use `collegeRushYpc` + `collegeReceptions` (20+ is a strong pass-game signal). QBs unchanged (draft capital + conference strength remain primary). SuperFlex QB need detection confirmed correct
 - **`loadPlayerData()` now persists scraped data**: Previously the function called scrapers but discarded the results. Now it fetches combine (`fetchCombineData`), college receiving (`fetchCollegeReceivingStats`), and college rushing (`fetchCollegeRushingStats`) in parallel, then upserts `athletics.fortyTime`, `athletics.verticalJump`, `collegeYardsPerRec`, `collegeTDs`, `collegeReceptions`, and `collegeRushYpc` onto all Player documents where `nflDraftYear >= 2025`. Matching is by `player.name` (case-insensitive)
-- **Rookie/devi class-year guardrail added to recommendations**: draft recommendation endpoints now detect rookie/devi contexts using draft shape and metadata (`rookie|devy`) and enforce single-class filtering by `nflDraftYear`. In offseason cases where Sleeper season lags, the backend auto-promotes to current calendar year when that class exists. Optional override: `?classYear=YYYY`
+- **Rookie/devy class-year guardrail added to recommendations**: draft recommendation endpoints now detect rookie/devi contexts using draft shape and metadata (`rookie|devy`) and enforce single-class filtering by `nflDraftYear`. In offseason cases where Sleeper season lags, the backend auto-promotes to current calendar year when that class exists. Optional override: `?classYear=YYYY`
 - **Roster-depth-aware recommendation fit scoring**: recommendation sorting now blends DAS with roster composition fit. Logic includes: SuperFlex QB floor (must cover 2 starters; 3-4 rostered is sufficient), RB/WR depth bands scaled by starter slots (e.g., 2 RB starters => ideal 4-6 RB depth), TE de-prioritization unless TE premium, and starter-opportunity/runway adjustments via depth chart + age
+- **32-team league exclusion for draft recommendations**: draft recommendation endpoints skip/disable recommendations for leagues with 32 teams, while preserving league/manager scouting data for analysis
+- **Scouting Hub UX overhaul**: scouting now supports (a) global manager search, (b) selected-league-only search/filtering, and (c) league dropdown scoping that shows only managers from that league. Default view no longer dumps all leaguemates; data is still prefetched for fast filtering
+- **Manager identity mapping fixed**: manager display names are now primary, with team names shown separately (important for emoji-heavy/custom team names). League-scoped scouting returns all league managers even if a manager has no saved `ManagerProfile` yet
 
 ---
 
@@ -112,7 +115,7 @@ services/
   sleeperService.js   All Sleeper API calls; getAllPlayers() has 24h in-memory cache
   sleeperSync.js      importSleeperPlayers() + syncSleeperIds() — used by startup, scheduler, and admin routes
   scoringEngine.js    calculateDAS() — Draft Assistant Score
-  winWindowService.js computeRosterMaturity() + analyzePositionalNeeds()
+  winWindowService.js computeRosterMaturity() + computeLeagueOutlooks() + analyzePositionalNeeds()
   alertService.js     generateBuySellAlerts()
   learningEngine.js   ingestDraft() + learnFromUserLeagues() + generateScoutingNotes()
   tradeEngine.js      Trade suggestion logic
@@ -149,6 +152,8 @@ services/
 | POST | `/learn` | Scan user leagues + leaguemate leagues for completed drafts |
 | GET | `/data-status` | Last-updated timestamps per data source |
 | GET | `/manager-profiles` | Scouting summaries for all leaguemates |
+| GET | `/manager-profiles?leagueId=:id` | League-scoped scouting: returns managers in that league + outlook/needs context |
+| GET | `/manager-search?q=text` | Global manager search (username/sleeperId) |
 
 ### Player Data Flow
 
@@ -168,6 +173,7 @@ leagues.js GET /  → builds playerMap (DB primary, Sleeper in-memory fallback)
         │
         ▼
 winWindowService.computeRosterMaturity()  → Roster Maturity Score + win window label
+winWindowService.computeLeagueOutlooks()  → league-relative contention/retool/rebuild labels
 winWindowService.analyzePositionalNeeds() → positional need gaps
 ```
 

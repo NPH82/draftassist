@@ -110,7 +110,8 @@ async function buildUserMap(leagueId) {
   const users = await getLeagueUsers(leagueId);
   return Object.fromEntries(
     users.map(u => [u.user_id, {
-      username: u.metadata?.team_name || u.display_name,
+      username: u.display_name || u.username || u.metadata?.team_name || 'Unknown',
+      teamName: u.metadata?.team_name || null,
       displayName: u.display_name,
       avatar: u.avatar,
     }])

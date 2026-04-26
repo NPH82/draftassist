@@ -114,9 +114,10 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
 
     if (leagueId) {
       // ── League-scoped view ────────────────────────────────────────────────
-      const [rosters, leagueDoc] = await Promise.all([
+      const [rosters, leagueDoc, usersMap] = await Promise.all([
         sleeperService.getRosters(leagueId).catch(() => []),
         League.findOne({ sleeperId: leagueId }).lean().catch(() => null),
+        sleeperService.buildUserMap(leagueId).catch(() => ({})),
       ]);
 
       // Build a rosterMap keyed by ownerId so we can attach win-window data
@@ -129,12 +130,16 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
       const profiles = await ManagerProfile.find({ sleeperId: { $in: ownerIds } }).lean();
       const profileMap = Object.fromEntries(profiles.map(p => [p.sleeperId, p]));
 
-      const baseEnriched = ownerIds.map(ownerId => {
+      const baseEnriched = rosters.map((roster) => {
+        const ownerId = roster.owner_id;
+        const fallbackSleeperId = ownerId || `orphan-${roster.roster_id}`;
         const p = profileMap[ownerId];
         const cached = cachedRosterByOwner[ownerId] || {};
+        const user = usersMap[ownerId] || {};
         return {
-          sleeperId: ownerId,
-          username: p?.username || cached.ownerUsername || ownerId,
+          sleeperId: fallbackSleeperId,
+          username: p?.username || user.username || cached.ownerUsername || ownerId || 'Unassigned Team',
+          teamName: user.teamName || cached.ownerTeamName || null,
           scoutingNotes: p?.scoutingNotes || [],
           positionWeights: p?.positionWeights,
           earlyRoundPositionWeights: p?.earlyRoundPositionWeights,
@@ -163,11 +168,16 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
 
     // Collect all leaguemate Sleeper user IDs across all leagues
     const leaguemateIds = new Set();
+    const userNameMap = {};
     for (const league of leagues) {
       try {
         const rosters = await sleeperService.getRosters(league.league_id);
+        const usersMap = await sleeperService.buildUserMap(league.league_id).catch(() => ({}));
         for (const r of rosters) {
-          if (r.owner_id && r.owner_id !== userId) leaguemateIds.add(r.owner_id);
+          if (r.owner_id && r.owner_id !== userId) {
+            leaguemateIds.add(r.owner_id);
+            if (usersMap[r.owner_id]) userNameMap[r.owner_id] = usersMap[r.owner_id];
+          }
         }
       } catch { /* skip */ }
     }
@@ -176,21 +186,27 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
       sleeperId: { $in: [...leaguemateIds] },
     }).lean();
 
-    const baseEnriched = profiles.map(p => ({
-      sleeperId: p.sleeperId,
-      username: p.username,
-      scoutingNotes: p.scoutingNotes || [],
-      positionWeights: p.positionWeights,
-      earlyRoundPositionWeights: p.earlyRoundPositionWeights,
-      topColleges: Object.entries(p.collegeAffinities || {})
-        .sort(([, a], [, b]) => b - a).slice(0, 3).map(([name, count]) => ({ name, count })),
-      topNflTeams: Object.entries(p.nflTeamAffinities || {})
-        .sort(([, a], [, b]) => b - a).slice(0, 3).map(([team, count]) => ({ team, count })),
-      playerPickCounts: p.playerPickCounts,
-      totalPicksObserved: p.totalPicksObserved,
-      draftsObserved: p.draftsObserved?.length || 0,
-      lastUpdated: p.lastUpdated,
-    }));
+    const profileMap = Object.fromEntries(profiles.map(p => [p.sleeperId, p]));
+    const baseEnriched = [...leaguemateIds].map((sid) => {
+      const p = profileMap[sid];
+      const u = userNameMap[sid] || {};
+      return {
+        sleeperId: sid,
+        username: p?.username || u.username || sid,
+        teamName: u.teamName || null,
+        scoutingNotes: p?.scoutingNotes || [],
+        positionWeights: p?.positionWeights,
+        earlyRoundPositionWeights: p?.earlyRoundPositionWeights,
+        topColleges: Object.entries(p?.collegeAffinities || {})
+          .sort(([, a], [, b]) => b - a).slice(0, 3).map(([name, count]) => ({ name, count })),
+        topNflTeams: Object.entries(p?.nflTeamAffinities || {})
+          .sort(([, a], [, b]) => b - a).slice(0, 3).map(([team, count]) => ({ team, count })),
+        playerPickCounts: p?.playerPickCounts,
+        totalPicksObserved: p?.totalPicksObserved || 0,
+        draftsObserved: p?.draftsObserved?.length || 0,
+        lastUpdated: p?.lastUpdated,
+      };
+    });
 
     const enriched = await enrichProfilesWithDraftClass(baseEnriched);
     const totalProfiled = enriched.filter(p => p.totalPicksObserved > 0).length;
@@ -213,7 +229,10 @@ router.get('/manager-search', requireAuth, async (req, res) => {
     if (q.length < 2) return res.json({ profiles: [] });
 
     const profiles = await ManagerProfile.find({
-      username: { $regex: q, $options: 'i' },
+      $or: [
+        { username: { $regex: q, $options: 'i' } },
+        { sleeperId: { $regex: q, $options: 'i' } },
+      ],
     }).limit(20).lean();
 
     const baseEnriched = profiles.map(p => ({

@@ -42,6 +42,11 @@ function ManagerCard({ p, showWinWindow }) {
           <span className="text-xs text-muted">
             {p.draftsObserved} draft{p.draftsObserved !== 1 ? 's' : ''} · {p.totalPicksObserved} picks
           </span>
+          {p.teamName && (
+            <div className="text-xs text-muted" style={{ marginTop: '0.05rem' }}>
+              Team: {p.teamName}
+            </div>
+          )}
         </div>
 
         {/* Win-window badge (league view only) */}
@@ -164,7 +169,8 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
 
   const [selectedLeagueId, setSelectedLeagueId] = useState('');
   const [searchText, setSearchText] = useState('');
-  const [viewMode, setViewMode] = useState('all'); // all | league | search
+  const [searchScope, setSearchScope] = useState('global'); // global | league
+  const [viewMode, setViewMode] = useState('idle'); // idle | all | league | search
   const [profiles, setProfiles] = useState(null);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState(null);
@@ -181,7 +187,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
         if (requestId !== latestRequestId.current) return;
         setProfiles(data.profiles || []);
         setStats({ total: data.totalLeaguemates, profiled: data.totalProfiled, unprofiled: data.unprofiled });
-        setViewMode('all');
+        setViewMode('idle');
       })
       .catch(() => {
         if (requestId !== latestRequestId.current) return;
@@ -198,7 +204,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
     clearTimeout(searchTimer.current);
 
     if (!selectedLeagueId) {
-      // Reset to all leaguemates unless there's a search text
+      // No league selected: keep prefetched data in memory but do not show full list by default.
       if (!searchText.trim()) {
         setLoading(true);
         const requestId = ++latestRequestId.current;
@@ -207,7 +213,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
             if (requestId !== latestRequestId.current) return;
             setProfiles(data.profiles || []);
             setStats({ total: data.totalLeaguemates, profiled: data.totalProfiled, unprofiled: data.unprofiled });
-            setViewMode('all');
+            setViewMode('idle');
           })
           .catch(() => {
             if (requestId !== latestRequestId.current) return;
@@ -249,11 +255,41 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
   const handleSearchChange = (e) => {
     const q = e.target.value;
     setSearchText(q);
-    setSelectedLeagueId(''); // clear league filter when typing
 
     clearTimeout(searchTimer.current);
+
+    const leagueScopedSearch = searchScope === 'league' && Boolean(selectedLeagueId);
+
+    // In league-scoped mode, search acts as an in-memory filter for that league's managers.
+    if (leagueScopedSearch) {
+      setViewMode('league');
+      return;
+    }
+
     if (!q.trim()) {
-      // Reset to all leaguemates
+      // Reset to league context when selected, else all leaguemates.
+      if (selectedLeagueId) {
+        setLoading(true);
+        const requestId = ++latestRequestId.current;
+        getLeagueManagerProfiles(selectedLeagueId)
+          .then(data => {
+            if (requestId !== latestRequestId.current) return;
+            setProfiles(data.profiles || []);
+            setStats({ total: data.totalLeaguemates });
+            setViewMode('league');
+          })
+          .catch(() => {
+            if (requestId !== latestRequestId.current) return;
+            setProfiles([]);
+          })
+          .finally(() => {
+            if (requestId !== latestRequestId.current) return;
+            setLoading(false);
+          });
+        return;
+      }
+
+      // Keep prefetched all-leaguemate data up to date, but stay in idle view.
       setLoading(true);
       const requestId = ++latestRequestId.current;
       getManagerProfiles()
@@ -261,7 +297,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
           if (requestId !== latestRequestId.current) return;
           setProfiles(data.profiles || []);
           setStats({ total: data.totalLeaguemates, profiled: data.totalProfiled, unprofiled: data.unprofiled });
-          setViewMode('all');
+          setViewMode('idle');
         })
         .catch(() => {
           if (requestId !== latestRequestId.current) return;
@@ -296,9 +332,20 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
 
   const showWinWindow = viewMode === 'league' && Boolean(selectedLeagueId);
   const selectedLeague = leagues.find(lg => lg.leagueId === selectedLeagueId) || null;
+  const showManagerList = viewMode !== 'idle';
+
+  const matchesManagerFilter = (p) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    const haystack = [p.username, p.teamName, p.sleeperId]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(q);
+  };
 
   // Sort: when league view, sort by win-window (Win Now first), then by picks observed
-  const sorted = profiles ? [...profiles].sort((a, b) => {
+  const sorted = profiles ? [...profiles].filter(matchesManagerFilter).sort((a, b) => {
     if (showWinWindow) {
       const aIdx = WIN_WINDOW_ORDER.indexOf(a.winWindowLabel || '');
       const bIdx = WIN_WINDOW_ORDER.indexOf(b.winWindowLabel || '');
@@ -327,7 +374,11 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
         <select
           className="input text-sm"
           value={selectedLeagueId}
-          onChange={e => setSelectedLeagueId(e.target.value)}
+          onChange={(e) => {
+            const nextLeagueId = e.target.value;
+            setSelectedLeagueId(nextLeagueId);
+            setSearchScope(nextLeagueId ? 'league' : 'global');
+          }}
           style={{ flex: '1 1 160px', minWidth: 0 }}
         >
           <option value="">All leaguemates</option>
@@ -336,6 +387,17 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
               {lg.name} ({lg.totalRosters}-team)
             </option>
           ))}
+        </select>
+
+        {/* Search scope */}
+        <select
+          className="input text-sm"
+          value={searchScope}
+          onChange={e => setSearchScope(e.target.value)}
+          style={{ flex: '1 1 160px', minWidth: 0 }}
+        >
+          <option value="global">Search globally</option>
+          <option value="league">Search selected league</option>
         </select>
       </div>
 
@@ -371,12 +433,20 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
         </div>
       )}
 
-      {!loading && viewMode === 'all' && (
-        <div className="text-xs text-muted">Showing all leaguemates</div>
+      {!loading && viewMode === 'idle' && (
+        <div className="text-xs text-muted">Select a league or search globally to scout managers</div>
       )}
 
       {!loading && viewMode === 'search' && searchText.trim() && (
         <div className="text-xs text-muted">Search results for "{searchText.trim()}"</div>
+      )}
+
+      {!loading && viewMode === 'league' && searchText.trim() && (
+        <div className="text-xs text-muted">
+          {searchScope === 'league' && selectedLeagueId
+            ? `Filtering this league by "${searchText.trim()}"`
+            : `League view for ${selectedLeague?.name || 'selected league'}`}
+        </div>
       )}
 
       {/* Scout button */}
@@ -395,13 +465,15 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
       {/* Results */}
       {loading && <div className="text-secondary text-sm">Loading...</div>}
 
-      {!loading && sorted.length === 0 && (
+      {!loading && showManagerList && sorted.length === 0 && (
         <div className="text-muted text-sm" style={{ textAlign: 'center', padding: '1rem' }}>
-          {searchText ? 'No managers found matching that name' : 'No manager profiles yet — run Scout to build them'}
+          {searchText
+            ? (selectedLeagueId ? 'No managers in this league match that filter' : 'No managers found matching that name')
+            : 'No manager profiles yet — run Scout to build them'}
         </div>
       )}
 
-      {!loading && sorted.length > 0 && (
+      {!loading && showManagerList && sorted.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {showWinWindow && (
             <div className="text-xs font-semibold text-muted" style={{ marginBottom: '0.1rem' }}>

@@ -151,6 +151,7 @@ router.get('/', requireAuth, async (req, res) => {
           rosterId: r.roster_id,
           ownerId: r.owner_id,
           ownerUsername: users[r.owner_id]?.username || 'Unknown',
+          ownerTeamName: users[r.owner_id]?.teamName || null,
           playerIds,
           taxiPlayerIds,
           allPlayerIds,
