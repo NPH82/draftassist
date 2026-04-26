@@ -312,7 +312,12 @@ export default function Dashboard() {
         <section>
           <h2 className="font-semibold" style={{ marginBottom: '0.75rem' }}>Scout Opponents</h2>
           <div className="card">
-            <ScoutingHub onLearn={handleLearn} learning={learning} learnMsg={learnMsg} />
+            <ScoutingHub
+              onLearn={handleLearn}
+              learning={learning}
+              learnMsg={learnMsg}
+              preferredLeagueId={expandedLeague}
+            />
           </div>
         </section>
       </div>

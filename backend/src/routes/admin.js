@@ -150,6 +150,10 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
           playerPickCounts: p?.playerPickCounts,
           totalPicksObserved: p?.totalPicksObserved || 0,
           draftsObserved: p?.draftsObserved?.length || 0,
+          draftQualityScore: p?.draftQualityScore ?? 50,
+          draftValueOverExpected: p?.draftValueOverExpected ?? 0,
+          draftHitRate: p?.draftHitRate ?? 0,
+          draftQualityTier: p?.draftQualityTier || 'unknown',
           lastUpdated: p?.lastUpdated,
           // Win-window from cached league roster (league-specific context)
           winWindowLabel: cached.winWindowLabel || null,
@@ -204,6 +208,10 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
         playerPickCounts: p?.playerPickCounts,
         totalPicksObserved: p?.totalPicksObserved || 0,
         draftsObserved: p?.draftsObserved?.length || 0,
+        draftQualityScore: p?.draftQualityScore ?? 50,
+        draftValueOverExpected: p?.draftValueOverExpected ?? 0,
+        draftHitRate: p?.draftHitRate ?? 0,
+        draftQualityTier: p?.draftQualityTier || 'unknown',
         lastUpdated: p?.lastUpdated,
       };
     });
@@ -248,6 +256,10 @@ router.get('/manager-search', requireAuth, async (req, res) => {
       playerPickCounts: p.playerPickCounts,
       totalPicksObserved: p.totalPicksObserved || 0,
       draftsObserved: p.draftsObserved?.length || 0,
+      draftQualityScore: p.draftQualityScore ?? 50,
+      draftValueOverExpected: p.draftValueOverExpected ?? 0,
+      draftHitRate: p.draftHitRate ?? 0,
+      draftQualityTier: p.draftQualityTier || 'unknown',
       lastUpdated: p.lastUpdated,
     }));
 

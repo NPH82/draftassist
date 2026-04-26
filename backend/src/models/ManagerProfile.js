@@ -34,6 +34,17 @@ const managerProfileSchema = new mongoose.Schema({
   // ADP deviation: how early/late they draft relative to board (negative = early, positive = late)
   avgAdpDeviation: { type: Number, default: 0 },
 
+  // Draft quality tracking across observed completed drafts
+  // valueOverExpected: positive means they draft better value than slot expectation.
+  draftQualityScore: { type: Number, default: 50 }, // 0-100
+  draftValueOverExpected: { type: Number, default: 0 },
+  draftHitRate: { type: Number, default: 0 }, // share of picks with positive value-over-expected
+  draftQualityTier: {
+    type: String,
+    enum: ['elite', 'strong', 'average', 'weak', 'unknown'],
+    default: 'unknown',
+  },
+
   // Draft history references
   draftsObserved: [String],  // Sleeper draft IDs
   totalPicksObserved: { type: Number, default: 0 },

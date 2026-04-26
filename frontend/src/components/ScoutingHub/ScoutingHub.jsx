@@ -14,6 +14,14 @@ const WIN_WINDOW_ORDER = [
   'Rebuilding',
 ];
 
+const DRAFT_QUALITY_COLOR = {
+  elite: 'text-green',
+  strong: 'text-accent',
+  average: 'text-secondary',
+  weak: 'text-yellow',
+  unknown: 'text-muted',
+};
+
 function ManagerCard({ p, showWinWindow }) {
   const [expanded, setExpanded] = useState(false);
   const hasData = p.totalPicksObserved > 0;
@@ -42,6 +50,13 @@ function ManagerCard({ p, showWinWindow }) {
           <span className="text-xs text-muted">
             {p.draftsObserved} draft{p.draftsObserved !== 1 ? 's' : ''} · {p.totalPicksObserved} picks
           </span>
+          <div className="text-xs" style={{ marginTop: '0.05rem' }}>
+            <span className="text-muted">Draft quality: </span>
+            <span className={DRAFT_QUALITY_COLOR[p.draftQualityTier || 'unknown'] || 'text-muted'}>
+              {(p.draftQualityTier || 'unknown').toUpperCase()}
+            </span>
+            <span className="text-muted"> · score {Math.round(p.draftQualityScore || 50)} · VOE {Number(p.draftValueOverExpected || 0).toFixed(1)}</span>
+          </div>
           {p.teamName && (
             <div className="text-xs text-muted" style={{ marginTop: '0.05rem' }}>
               Team: {p.teamName}
@@ -164,7 +179,7 @@ function ManagerCard({ p, showWinWindow }) {
   );
 }
 
-export default function ScoutingHub({ onLearn, learning, learnMsg }) {
+export default function ScoutingHub({ onLearn, learning, learnMsg, preferredLeagueId = null }) {
   const { leagues } = useApp();
 
   const [selectedLeagueId, setSelectedLeagueId] = useState('');
@@ -250,6 +265,14 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
   useEffect(() => {
     return () => clearTimeout(searchTimer.current);
   }, []);
+
+  // If a league card is selected on the dashboard, sync scouting to that league.
+  useEffect(() => {
+    if (!preferredLeagueId) return;
+    if (preferredLeagueId === selectedLeagueId) return;
+    setSelectedLeagueId(preferredLeagueId);
+    setSearchScope('league');
+  }, [preferredLeagueId, selectedLeagueId]);
 
   // Debounced manager search
   const handleSearchChange = (e) => {
@@ -352,6 +375,9 @@ export default function ScoutingHub({ onLearn, learning, learnMsg }) {
       const aOrd = aIdx === -1 ? 99 : aIdx;
       const bOrd = bIdx === -1 ? 99 : bIdx;
       if (aOrd !== bOrd) return aOrd - bOrd;
+    }
+    if ((b.draftQualityScore || 0) !== (a.draftQualityScore || 0)) {
+      return (b.draftQualityScore || 0) - (a.draftQualityScore || 0);
     }
     return (b.totalPicksObserved || 0) - (a.totalPicksObserved || 0);
   }) : [];
