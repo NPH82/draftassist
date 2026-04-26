@@ -12,6 +12,10 @@ const adminRoutes = require('./routes/admin');
 
 const app = express();
 
+// Trust one level of reverse-proxy (Render's load balancer).
+// Required for express-rate-limit to read X-Forwarded-For correctly.
+app.set('trust proxy', 1);
+
 // Security
 app.use(helmet());
 
