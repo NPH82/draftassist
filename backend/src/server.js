@@ -3,7 +3,7 @@ require('dotenv').config();
 const app = require('./app');
 const connectDB = require('./config/db');
 const { startScheduler } = require('./jobs/scheduler');
-const { loadPlayerData } = require('./scrapers');
+const { importSleeperPlayers, syncSleeperIds } = require('./services/sleeperSync');
 
 const PORT = process.env.PORT || 4000;
 
@@ -41,6 +41,32 @@ async function start() {
   if (count2026 === 0) {
     console.log('[Server] No 2026 players found -- seeding 2026 class...');
     await seedFile('rookieSeed2026.json', '2026');
+  }
+
+  // Import all skill-position veterans from Sleeper if the DB is sparse.
+  // Threshold: if fewer than 500 players, the veteran import hasn't run yet.
+  // importSleeperPlayers is safe to call repeatedly -- it only refreshes
+  // team/age/injuryStatus on existing records and won't touch scraped values.
+  const totalPlayers = await Player.countDocuments();
+  if (totalPlayers < 500) {
+    console.log(`[Server] Only ${totalPlayers} players in DB -- running Sleeper import...`);
+    try {
+      const importResult = await importSleeperPlayers();
+      console.log(`[Server] Sleeper import done: ${importResult.created} created, ${importResult.updated} updated`);
+    } catch (err) {
+      console.warn('[Server] Sleeper import failed (non-fatal):', err.message);
+    }
+  }
+
+  // Back-fill sleeperId for any seeded players that are still missing one.
+  // Runs every startup -- it's a no-op when all IDs are already set.
+  try {
+    const syncResult = await syncSleeperIds();
+    if (syncResult.updated > 0) {
+      console.log(`[Server] Sleeper ID sync: ${syncResult.updated} matched`);
+    }
+  } catch (err) {
+    console.warn('[Server] Sleeper ID sync failed (non-fatal):', err.message);
   }
 
   startScheduler();

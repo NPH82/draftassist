@@ -10,6 +10,7 @@ const { learnFromUserLeagues } = require('../services/learningEngine');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const sleeperService = require('../services/sleeperService');
+const { importSleeperPlayers, syncSleeperIds: runSyncSleeperIds } = require('../services/sleeperSync');
 
 // POST /api/admin/refresh/rankings -- trigger daily rankings scrape now
 router.post('/refresh/rankings', requireAuth, async (req, res) => {
@@ -168,51 +169,13 @@ router.post('/seed-rookies/:year', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/admin/sync-sleeper-ids -- fetch Sleeper player DB and back-fill sleeperId on our players
+// POST /api/admin/sync-sleeper-ids -- back-fill sleeperId on players missing one
 router.post('/sync-sleeper-ids', requireAuth, async (req, res) => {
   try {
-    const { getAllPlayers } = require('../services/sleeperService');
-    // Fetch all ~8000 NFL players from Sleeper (large payload -- ~2 MB)
-    const sleeperMap = await getAllPlayers('nfl');
-
-    // Build lookup: normalised "full_name|POSITION" -> sleeperId
-    const lookup = {};
-    for (const [id, p] of Object.entries(sleeperMap)) {
-      if (!p.full_name || !p.position) continue;
-      const key = `${p.full_name.toLowerCase().trim()}|${p.position.toUpperCase()}`;
-      lookup[key] = id;
-      // Also index first_last without suffix (handles "Jr." mismatches)
-      const bare = p.full_name.toLowerCase().replace(/\s+(jr\.?|sr\.?|ii|iii|iv)$/i, '').trim();
-      if (bare !== p.full_name.toLowerCase().trim()) {
-        lookup[`${bare}|${p.position.toUpperCase()}`] = id;
-      }
-    }
-
-    // Find players in our DB that are missing a sleeperId
-    const players = await Player.find({ $or: [{ sleeperId: null }, { sleeperId: '' }, { sleeperId: { $exists: false } }] }).lean();
-
-    let updated = 0;
-    let notFound = 0;
-    const missed = [];
-
-    for (const player of players) {
-      const key = `${player.name.toLowerCase().trim()}|${player.position.toUpperCase()}`;
-      const bare = player.name.toLowerCase().replace(/\s+(jr\.?|sr\.?|ii|iii|iv)$/i, '').trim() + `|${player.position.toUpperCase()}`;
-      const sid = lookup[key] || lookup[bare];
-      if (sid) {
-        await Player.updateOne({ _id: player._id }, { sleeperId: sid });
-        updated++;
-      } else {
-        notFound++;
-        missed.push(`${player.name} (${player.position})`);
-      }
-    }
-
+    const result = await runSyncSleeperIds();
     res.json({
-      message: `Synced Sleeper IDs: ${updated} updated, ${notFound} not matched`,
-      updated,
-      notFound,
-      unmatched: missed.slice(0, 20), // first 20 for debug
+      message: `Synced Sleeper IDs: ${result.updated} updated, ${result.notFound} not matched`,
+      ...result,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -221,56 +184,12 @@ router.post('/sync-sleeper-ids', requireAuth, async (req, res) => {
 
 // POST /api/admin/import-sleeper-players
 // Upserts all skill-position players from Sleeper's /players/nfl into our DB.
-// Safe to re-run: only overwrites team/age/injuryStatus, never touches
-// ktcValue/fantasyProsValue/dasScore that scrapers have already set.
 router.post('/import-sleeper-players', requireAuth, async (req, res) => {
-  const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
   try {
-    const { getAllPlayers } = require('../services/sleeperService');
-    const sleeperMap = await getAllPlayers('nfl');
-
-    let created = 0;
-    let updated = 0;
-    let skipped = 0;
-
-    for (const [id, sp] of Object.entries(sleeperMap)) {
-      if (!sp.position || !SKILL_POSITIONS.has(sp.position)) { skipped++; continue; }
-      const fullName = (sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`).trim();
-      if (!fullName) { skipped++; continue; }
-
-      const result = await Player.findOneAndUpdate(
-        { sleeperId: id },
-        {
-          // Always refresh these -- they change during the season
-          $set: {
-            team: sp.team || null,
-            age: sp.age || null,
-            currentInjuryStatus: sp.injury_status || 'Active',
-          },
-          // Only set on first insert -- don't overwrite scraped values
-          $setOnInsert: {
-            sleeperId: id,
-            name: fullName,
-            position: sp.position,
-            ktcValue: 0,
-            fantasyProsValue: 0,
-          },
-        },
-        { upsert: true, returnDocument: 'after' }
-      );
-
-      if (result.ktcValue === 0 && result.fantasyProsValue === 0) {
-        created++;
-      } else {
-        updated++;
-      }
-    }
-
+    const result = await importSleeperPlayers();
     res.json({
-      message: `Import complete: ${created} created, ${updated} updated, ${skipped} skipped (non-skill pos)`,
-      created,
-      updated,
-      skipped,
+      message: `Import complete: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped (non-skill pos)`,
+      ...result,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
