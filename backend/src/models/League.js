@@ -6,6 +6,8 @@ const rosterSchema = new mongoose.Schema({
   ownerId: String,           // Sleeper user ID
   ownerUsername: String,
   playerIds: [String],       // Sleeper player IDs
+  taxiPlayerIds: [String],   // Sleeper taxi squad player IDs
+  allPlayerIds: [String],    // Combined starters + taxi IDs for depth planning
   picks: mongoose.Schema.Types.Mixed,  // future picks from Sleeper
   // Computed win window
   rosterMaturityScore: Number,

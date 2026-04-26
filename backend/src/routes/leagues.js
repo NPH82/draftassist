@@ -142,14 +142,18 @@ router.get('/', requireAuth, async (req, res) => {
 
       const processedRosters = rosters.map(r => {
         const playerIds = r.players || [];
+        const taxiPlayerIds = r.taxi || [];
+        const allPlayerIds = [...new Set([...playerIds, ...taxiPlayerIds])];
         const futurePicks = r.picks || [];
         const maturity = computeRosterMaturity(playerIds, playerMap, futurePicks);
-        const needs = analyzePositionalNeeds(playerIds, playerMap, sl.roster_positions, sl.scoring_settings);
+        const needs = analyzePositionalNeeds(allPlayerIds, playerMap, sl.roster_positions, sl.scoring_settings);
         return {
           rosterId: r.roster_id,
           ownerId: r.owner_id,
           ownerUsername: users[r.owner_id]?.username || 'Unknown',
           playerIds,
+          taxiPlayerIds,
+          allPlayerIds,
           picks: r.picks,
           rosterMaturityScore: maturity.score,
           winWindowLabel: maturity.label,
@@ -315,8 +319,10 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
     // Positional needs for the user's roster
     const myRoster = league.rosters.find(r => r.ownerId === sleeperId);
 
-    const rosterPlayerDocs = await Player.find({ sleeperId: { $in: myRoster?.playerIds || [] } })
-      .select('sleeperId position age isPassCatcher depthChartPosition')
+    const rosterPoolIds = myRoster?.allPlayerIds || myRoster?.playerIds || [];
+
+    const rosterPlayerDocs = await Player.find({ sleeperId: { $in: rosterPoolIds } })
+      .select('sleeperId position age isPassCatcher depthChartPosition ktcValue fantasyProsRank nflDraftRound')
       .lean();
     const rosterPlayerMap = Object.fromEntries(rosterPlayerDocs.map(p => [p.sleeperId, p]));
 
@@ -326,7 +332,7 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
     } catch (e) {
       console.warn('[Draft Targets] Sleeper fallback map unavailable:', e.message);
     }
-    for (const id of (myRoster?.playerIds || [])) {
+    for (const id of rosterPoolIds) {
       if (rosterPlayerMap[id]) continue;
       const sp = sleeperPlayerMap[id];
       if (!sp || !['QB', 'RB', 'WR', 'TE'].includes(sp.position)) continue;
@@ -338,13 +344,13 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
     }
 
     const rosterComposition = buildRosterComposition(
-      myRoster?.playerIds || [],
+      rosterPoolIds,
       rosterPlayerMap,
       league.rosterPositions || [],
       league.scoringSettings || {}
     );
     const positionalNeeds = analyzePositionalNeeds(
-      myRoster?.playerIds || [],
+      rosterPoolIds,
       rosterPlayerMap,
       league.rosterPositions || [],
       league.scoringSettings || {}

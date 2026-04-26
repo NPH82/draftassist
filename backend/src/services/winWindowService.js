@@ -10,6 +10,20 @@ const REBUILD_LABELS = {
   winNow: 'Win Now',
 };
 
+function estimatedValueFromProfile(player = {}) {
+  if (player.ktcValue || player.fantasyProsValue) return player.ktcValue || player.fantasyProsValue || 0;
+
+  const posBase = { QB: 5200, RB: 3600, WR: 3900, TE: 2800 };
+  const base = posBase[player.position] || 3000;
+  const age = player.age || 26;
+
+  // Age-adjusted baseline so unknown-value veterans aren't treated as zero-value assets.
+  if (age <= 23) return Math.round(base * 1.1);
+  if (age <= 27) return base;
+  if (age <= 30) return Math.round(base * 0.82);
+  return Math.round(base * 0.65);
+}
+
 /**
  * playerMap: { sleeperId -> { age, ktcValue, fantasyProsValue, position } }
  * picks: array of future pick objects from Sleeper
@@ -33,12 +47,16 @@ function computeRosterMaturity(rosterPlayerIds, playerMap, futurePicks = []) {
   const ages = players.map(p => p.age).filter(Boolean);
   const avgAge = ages.length ? ages.reduce((a, b) => a + b, 0) / ages.length : 25;
 
-  // 2. Total KTC/FP value
-  const totalValue = players.reduce((sum, p) => sum + (p.ktcValue || p.fantasyProsValue || 0), 0);
+  // 2. Total market value (with age/position proxy fallback when market values are missing)
+  const totalValue = players.reduce((sum, p) => sum + estimatedValueFromProfile(p), 0);
   const avgValue = players.length ? totalValue / players.length : 0;
 
-  // 3. Ratio of established starters (age >= 24 and value >= 3000)
-  const established = players.filter(p => p.age >= 24 && (p.ktcValue || 0) >= 3000);
+  // 3. Ratio of established starters (market-proven or prime-age contributors)
+  const established = players.filter((p) => {
+    const marketValue = p.ktcValue || p.fantasyProsValue || 0;
+    if (marketValue >= 3000) return true;
+    return (p.age || 0) >= 24 && (p.age || 0) <= 30;
+  });
   const establishedRatio = established.length / players.length;
 
   // 4. Future first-round picks (rebuild indicator if holding many)
@@ -91,6 +109,47 @@ function countSkillPlayers(rosterPlayerIds, playerMap) {
   return counts;
 }
 
+function rankThresholdByPosition(position) {
+  if (position === 'QB') return 18;
+  if (position === 'RB') return 28;
+  if (position === 'WR') return 32;
+  if (position === 'TE') return 14;
+  return 30;
+}
+
+function isStarterProfile(player = {}) {
+  if ((player.depthChartPosition || 0) === 1) return true;
+  const rankCut = rankThresholdByPosition(player.position);
+  if ((player.fantasyProsRank || 9999) <= rankCut) return true;
+  if ((player.ktcValue || 0) >= 5500) return true;
+  return false;
+}
+
+function isProvenProfile(player = {}) {
+  const rankCut = Math.max(10, Math.floor(rankThresholdByPosition(player.position) * 0.65));
+  if ((player.fantasyProsRank || 9999) <= rankCut) return true;
+  if ((player.ktcValue || 0) >= 6200) return true;
+  return false;
+}
+
+function buildIncumbentProfiles(rosterPlayerIds, playerMap) {
+  const incumbents = {
+    QB: { starters: 0, proven: 0 },
+    RB: { starters: 0, proven: 0 },
+    WR: { starters: 0, proven: 0 },
+    TE: { starters: 0, proven: 0 },
+  };
+
+  for (const id of rosterPlayerIds || []) {
+    const p = playerMap[id];
+    if (!p || !incumbents[p.position]) continue;
+    if (isStarterProfile(p)) incumbents[p.position].starters += 1;
+    if (isProvenProfile(p)) incumbents[p.position].proven += 1;
+  }
+
+  return incumbents;
+}
+
 function detectTePremium(scoringSettings = {}) {
   const teRec = Number(scoringSettings.rec_te || 0);
   const rec = Number(scoringSettings.rec || 0);
@@ -127,6 +186,7 @@ function getStarterSpots(rosterPositions = []) {
 
 function buildRosterComposition(rosterPlayerIds, playerMap, rosterPositions = [], scoringSettings = {}) {
   const counts = countSkillPlayers(rosterPlayerIds, playerMap);
+  const incumbents = buildIncumbentProfiles(rosterPlayerIds, playerMap);
   const starterSpots = getStarterSpots(rosterPositions);
 
   const isSuperFlex = Array.isArray(rosterPositions) &&
@@ -155,6 +215,7 @@ function buildRosterComposition(rosterPlayerIds, playerMap, rosterPositions = []
 
   return {
     counts,
+    incumbents,
     starterSpots,
     isSuperFlex,
     isTePremium,
@@ -172,15 +233,36 @@ function scoreDraftFit(player, composition, teamContext = {}) {
 
   const pos = player.position;
   const count = composition.counts?.[pos] || 0;
+  const incumbent = composition.incumbents?.[pos] || { starters: 0, proven: 0 };
   const target = composition.targets[pos];
   let score = 0;
 
   // Roster depth fit for this position.
   if (count < target.min) score += 30;
   else if (count < target.idealLow) score += 15;
-  else if (count <= target.idealHigh) score += 6;
+  else if (count < target.idealHigh) score += 4;
+  else if (count === target.idealHigh) score += (pos === 'QB' ? -4 : 0);
   else if (count > target.maxUseful) score -= 14;
   else score -= 5;
+
+  // In SF/2QB builds, once you already have enough QBs, prioritize other scarce starter slots.
+  if (pos === 'QB' && count >= target.idealHigh) {
+    score -= 6;
+  }
+
+  // Explicitly suppress QB recommendations when starter-quality depth is already strong.
+  if (pos === 'QB') {
+    if (incumbent.starters >= 4) score -= 22;
+    else if (incumbent.starters === 3) score -= 12;
+    if (incumbent.proven >= 2) score -= 8;
+  }
+
+  // RB recommendation balance: respect proven starters, but keep youth replenishment alive.
+  if (pos === 'RB') {
+    if (incumbent.starters >= 2 && incumbent.proven >= 2) score -= 8;
+    if ((player.age || 24) <= 23) score += 5;
+    if ((player.age || 24) <= 22 && (player.nflDraftRound || 9) <= 2) score += 3;
+  }
 
   // Starter opportunity now vs wait-to-contribute.
   const depth = player.depthChartPosition || 2;
@@ -235,12 +317,29 @@ function scoreDraftFit(player, composition, teamContext = {}) {
 function analyzePositionalNeeds(rosterPlayerIds, playerMap, rosterPositions = [], scoringSettings = {}) {
   const composition = buildRosterComposition(rosterPlayerIds, playerMap, rosterPositions, scoringSettings);
   const needs = {};
+
+  const downgradeOne = (need) => {
+    if (need === 'high') return 'medium';
+    if (need === 'medium') return 'low';
+    return 'low';
+  };
+
   for (const pos of ['QB', 'RB', 'WR', 'TE']) {
     const count = composition.counts[pos] || 0;
+    const incumbent = composition.incumbents[pos] || { starters: 0, proven: 0 };
     const target = composition.targets[pos];
-    if (count < target.min) needs[pos] = 'high';
-    else if (count < target.idealLow) needs[pos] = 'medium';
-    else needs[pos] = 'low';
+
+    let need = 'low';
+    if (count < target.min) need = 'high';
+    else if (count < target.idealLow) need = 'medium';
+
+    // If a position already has enough starter/proven quality, soften the need flag.
+    const requiredStarters = Math.max(1, Math.round(composition.starterSpots[pos] || 1));
+    if (incumbent.starters >= requiredStarters || incumbent.proven >= requiredStarters) {
+      need = downgradeOne(need);
+    }
+
+    needs[pos] = need;
   }
 
   return needs;

@@ -209,8 +209,10 @@ router.get('/:draftId', requireAuth, async (req, res) => {
     // Get my roster from league
     const myRoster = league?.rosters.find(r => r.ownerId === sleeperId);
 
-    const rosterPlayerDocs = await Player.find({ sleeperId: { $in: myRoster?.playerIds || [] } })
-      .select('sleeperId position age isPassCatcher depthChartPosition')
+    const rosterPoolIds = myRoster?.allPlayerIds || myRoster?.playerIds || [];
+
+    const rosterPlayerDocs = await Player.find({ sleeperId: { $in: rosterPoolIds } })
+      .select('sleeperId position age isPassCatcher depthChartPosition ktcValue fantasyProsRank nflDraftRound')
       .lean();
     const rosterPlayerMap = Object.fromEntries(rosterPlayerDocs.map(p => [p.sleeperId, p]));
 
@@ -220,7 +222,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
     } catch (e) {
       console.warn('[Draft] Sleeper fallback map unavailable:', e.message);
     }
-    for (const id of (myRoster?.playerIds || [])) {
+    for (const id of rosterPoolIds) {
       if (rosterPlayerMap[id]) continue;
       const sp = sleeperPlayerMap[id];
       if (!sp || !['QB', 'RB', 'WR', 'TE'].includes(sp.position)) continue;
@@ -232,13 +234,13 @@ router.get('/:draftId', requireAuth, async (req, res) => {
     }
 
     const rosterComposition = buildRosterComposition(
-      myRoster?.playerIds || [],
+      rosterPoolIds,
       rosterPlayerMap,
       league?.rosterPositions || [],
       league?.scoringSettings || {}
     );
     const positionalNeeds = analyzePositionalNeeds(
-      myRoster?.playerIds || [],
+      rosterPoolIds,
       rosterPlayerMap,
       league?.rosterPositions || [],
       league?.scoringSettings || {}
