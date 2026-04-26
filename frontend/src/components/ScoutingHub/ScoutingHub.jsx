@@ -396,6 +396,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg, preferredLeag
           type="text"
           className="input text-sm"
           placeholder="Search any manager..."
+          aria-label="Search managers"
           value={searchText}
           onChange={handleSearchChange}
           style={{ flex: '1 1 180px', minWidth: 0 }}
@@ -405,6 +406,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg, preferredLeag
         <select
           className="input text-sm"
           value={selectedLeagueId}
+          aria-label="Select league to scout"
           onChange={(e) => {
             const nextLeagueId = e.target.value;
             setSelectedLeagueId(nextLeagueId);
@@ -424,6 +426,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg, preferredLeag
         <select
           className="input text-sm"
           value={searchScope}
+          aria-label="Select scouting search scope"
           onChange={e => setSearchScope(e.target.value)}
           style={{ flex: '1 1 160px', minWidth: 0 }}
         >
@@ -460,7 +463,7 @@ export default function ScoutingHub({ onLearn, learning, learnMsg, preferredLeag
           background: 'var(--bg-secondary)',
           color: 'var(--text-secondary)',
         }}>
-          Showing managers in: <span className="font-semibold">{selectedLeague.name}</span>
+          Showing managers in: <span className="font-semibold league-title">{selectedLeague.name}</span>
         </div>
       )}
 

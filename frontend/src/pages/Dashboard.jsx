@@ -132,7 +132,7 @@ export default function Dashboard() {
                 >
                   <div className="flex justify-between items-center">
                     <div>
-                      <div className="font-semibold">{d.leagueName}</div>
+                      <div className="font-semibold league-title">{d.leagueName}</div>
                       <div className="text-xs text-secondary">Pick {d.currentPick} of {d.totalRosters * d.rounds}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
@@ -165,11 +165,13 @@ export default function Dashboard() {
                     <button
                       className="card"
                       style={{ cursor: 'pointer', userSelect: 'none', width: '100%', textAlign: 'left' }}
+                      aria-expanded={isExpanded}
+                      aria-label={`Toggle league details for ${lg.name}`}
                       onClick={() => setExpandedLeague(isExpanded ? null : lg.leagueId)}
                     >
                       <div className="flex justify-between items-center" style={{ marginBottom: '0.4rem' }}>
                         <div>
-                          <div className="font-semibold">{lg.name}</div>
+                          <div className="font-semibold league-title">{lg.name}</div>
                           <div className="text-xs text-secondary">{lg.totalRosters}-team{lg.isSuperFlex ? ' SuperFlex' : ''}{lg.isPpr ? ' PPR' : ''}</div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>

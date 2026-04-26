@@ -55,8 +55,8 @@ function deriveMarketRank(player = {}, pick) {
     // Rough value->rank proxy when explicit ranks are missing.
     return Math.max(1, Math.round(220 - (player.ktcValue / 45)));
   }
-  // No market ranking available: use the pick itself as neutral expectation.
-  return pick?.pick_no || null;
+  // No market ranking available.
+  return null;
 }
 
 function qualityTierFromScore(score) {
@@ -76,7 +76,7 @@ function buildDraftQualityNote(tier, valueOverExpected) {
 
 function evaluateDraftQuality(picks = [], playerValueMap = {}) {
   if (!Array.isArray(picks) || picks.length === 0) {
-    return { score: 50, valueOverExpected: 0, hitRate: 0, tier: 'unknown' };
+    return { score: 50, valueOverExpected: 0, hitRate: 0, tier: 'unknown', sampleSize: 0 };
   }
 
   const contributions = [];
@@ -95,7 +95,7 @@ function evaluateDraftQuality(picks = [], playerValueMap = {}) {
   }
 
   if (contributions.length === 0) {
-    return { score: 50, valueOverExpected: 0, hitRate: 0, tier: 'unknown' };
+    return { score: 50, valueOverExpected: 0, hitRate: 0, tier: 'unknown', sampleSize: 0 };
   }
 
   const valueOverExpected = contributions.reduce((sum, v) => sum + v, 0) / contributions.length;
@@ -107,6 +107,7 @@ function evaluateDraftQuality(picks = [], playerValueMap = {}) {
     valueOverExpected: Number(valueOverExpected.toFixed(2)),
     hitRate: Number(hitRate.toFixed(3)),
     tier: qualityTierFromScore(score),
+    sampleSize: contributions.length,
   };
 }
 
@@ -158,8 +159,9 @@ async function updateManagerProfile(sleeperId, username, picks, draftId, playerV
   const leagueId = meta?.leagueId || null;
   const seasonMissing = season != null && !(profile.seasonsObserved || []).includes(season);
   const leagueMissing = leagueId && !(profile.leaguesObserved || []).includes(leagueId);
+  const legacyFlatScore = Number(profile.draftQualityScore) === 38;
 
-  if (alreadyObserved && profile.draftQualityTier && profile.draftQualityTier !== 'unknown') {
+  if (alreadyObserved && profile.draftQualityTier && profile.draftQualityTier !== 'unknown' && !legacyFlatScore) {
     if (seasonMissing || leagueMissing) {
       const addToSet = {};
       if (seasonMissing) addToSet.seasonsObserved = season;
@@ -292,6 +294,10 @@ async function updateManagerProfile(sleeperId, username, picks, draftId, playerV
 
 function generateScoutingNotes(posWeights, earlyWeights, colleges, nflTeams = {}, draftQuality = null) {
   const notes = [];
+
+  if (draftQuality?.sampleSize != null && draftQuality.sampleSize < 4) {
+    notes.push('Limited market data to grade draft quality confidently');
+  }
 
   if (draftQuality?.tier === 'elite') {
     notes.push(`Drafts above market expectation consistently (elite hit profile)`);
