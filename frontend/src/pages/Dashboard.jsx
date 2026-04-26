@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, triggerLearn, seedRookies, syncSleeperIds } from '../services/api';
+import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, triggerLearn, seedRookies, syncSleeperIds, importSleeperPlayers } from '../services/api';
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
@@ -22,6 +22,8 @@ export default function Dashboard() {
   const [seedMsg, setSeedMsg] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState(null);
 
   useEffect(() => {
     getActiveDrafts()
@@ -43,6 +45,19 @@ export default function Dashboard() {
       setRefreshMsg('Refresh failed -- check Render logs');
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleImportSleeperPlayers = async () => {
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const res = await importSleeperPlayers();
+      setImportMsg(res.message);
+    } catch (err) {
+      setImportMsg(err?.response?.data?.error || 'Import failed');
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -247,6 +262,22 @@ export default function Dashboard() {
             </button>
             <div className="text-xs text-muted">
               Fetches the Sleeper player database and back-fills missing player IDs so scraper data matches correctly.
+            </div>
+
+            {importMsg && (
+              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
+                {importMsg}
+              </div>
+            )}
+            <button
+              className="btn btn-secondary text-sm"
+              onClick={handleImportSleeperPlayers}
+              disabled={importing}
+            >
+              {importing ? 'Importing...' : 'Import All Sleeper Players'}
+            </button>
+            <div className="text-xs text-muted">
+              Upserts all QB/RB/WR/TE players from Sleeper into the database so veteran rosters evaluate correctly. Safe to re-run.
             </div>
           </div>
         </section>

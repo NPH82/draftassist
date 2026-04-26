@@ -219,4 +219,62 @@ router.post('/sync-sleeper-ids', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/admin/import-sleeper-players
+// Upserts all skill-position players from Sleeper's /players/nfl into our DB.
+// Safe to re-run: only overwrites team/age/injuryStatus, never touches
+// ktcValue/fantasyProsValue/dasScore that scrapers have already set.
+router.post('/import-sleeper-players', requireAuth, async (req, res) => {
+  const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
+  try {
+    const { getAllPlayers } = require('../services/sleeperService');
+    const sleeperMap = await getAllPlayers('nfl');
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const [id, sp] of Object.entries(sleeperMap)) {
+      if (!sp.position || !SKILL_POSITIONS.has(sp.position)) { skipped++; continue; }
+      const fullName = (sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`).trim();
+      if (!fullName) { skipped++; continue; }
+
+      const result = await Player.findOneAndUpdate(
+        { sleeperId: id },
+        {
+          // Always refresh these -- they change during the season
+          $set: {
+            team: sp.team || null,
+            age: sp.age || null,
+            currentInjuryStatus: sp.injury_status || 'Active',
+          },
+          // Only set on first insert -- don't overwrite scraped values
+          $setOnInsert: {
+            sleeperId: id,
+            name: fullName,
+            position: sp.position,
+            ktcValue: 0,
+            fantasyProsValue: 0,
+          },
+        },
+        { upsert: true, returnDocument: 'after' }
+      );
+
+      if (result.ktcValue === 0 && result.fantasyProsValue === 0) {
+        created++;
+      } else {
+        updated++;
+      }
+    }
+
+    res.json({
+      message: `Import complete: ${created} created, ${updated} updated, ${skipped} skipped (non-skill pos)`,
+      created,
+      updated,
+      skipped,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

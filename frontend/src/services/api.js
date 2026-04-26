@@ -45,5 +45,6 @@ export const triggerLearn = () => api.post('/admin/learn').then(r => r.data);
 export const getManagerProfiles = () => api.get('/admin/manager-profiles').then(r => r.data);
 export const seedRookies = (year) => api.post(`/admin/seed-rookies/${year}`).then(r => r.data);
 export const syncSleeperIds = () => api.post('/admin/sync-sleeper-ids').then(r => r.data);
+export const importSleeperPlayers = () => api.post('/admin/import-sleeper-players').then(r => r.data);
 
 export default api;
