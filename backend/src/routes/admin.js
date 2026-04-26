@@ -105,9 +105,60 @@ router.post('/learn', requireAuth, async (req, res) => {
 });
 
 // GET /api/admin/manager-profiles -- scouting summaries for all leaguemates
+// Optional query param ?leagueId=XXX narrows to a single league and adds win-window data.
 router.get('/manager-profiles', requireAuth, async (req, res) => {
   try {
     const userId = req.user.sleeperId;
+    const { leagueId } = req.query;
+    const League = require('../models/League');
+
+    if (leagueId) {
+      // ── League-scoped view ────────────────────────────────────────────────
+      const [rosters, leagueDoc] = await Promise.all([
+        sleeperService.getRosters(leagueId).catch(() => []),
+        League.findOne({ sleeperId: leagueId }).lean().catch(() => null),
+      ]);
+
+      // Build a rosterMap keyed by ownerId so we can attach win-window data
+      const cachedRosterByOwner = {};
+      for (const r of (leagueDoc?.rosters || [])) {
+        if (r.ownerId) cachedRosterByOwner[r.ownerId] = r;
+      }
+
+      const ownerIds = rosters.map(r => r.owner_id).filter(Boolean);
+      const profiles = await ManagerProfile.find({ sleeperId: { $in: ownerIds } }).lean();
+      const profileMap = Object.fromEntries(profiles.map(p => [p.sleeperId, p]));
+
+      const baseEnriched = ownerIds.map(ownerId => {
+        const p = profileMap[ownerId];
+        const cached = cachedRosterByOwner[ownerId] || {};
+        return {
+          sleeperId: ownerId,
+          username: p?.username || cached.ownerUsername || ownerId,
+          scoutingNotes: p?.scoutingNotes || [],
+          positionWeights: p?.positionWeights,
+          earlyRoundPositionWeights: p?.earlyRoundPositionWeights,
+          topColleges: Object.entries(p?.collegeAffinities || {})
+            .sort(([, a], [, b]) => b - a).slice(0, 3).map(([name, count]) => ({ name, count })),
+          topNflTeams: Object.entries(p?.nflTeamAffinities || {})
+            .sort(([, a], [, b]) => b - a).slice(0, 3).map(([team, count]) => ({ team, count })),
+          playerPickCounts: p?.playerPickCounts,
+          totalPicksObserved: p?.totalPicksObserved || 0,
+          draftsObserved: p?.draftsObserved?.length || 0,
+          lastUpdated: p?.lastUpdated,
+          // Win-window from cached league roster (league-specific context)
+          winWindowLabel: cached.winWindowLabel || null,
+          winWindowReason: cached.winWindowReason || null,
+          positionalNeeds: cached.positionalNeeds || null,
+          isCurrentUser: ownerId === userId,
+        };
+      });
+
+      const enriched = await enrichProfilesWithDraftClass(baseEnriched);
+      return res.json({ profiles: enriched, leagueId, totalLeaguemates: ownerIds.length - 1 });
+    }
+
+    // ── Default: all leaguemates across all leagues ───────────────────────
     const leagues = await sleeperService.getUserLeagues(userId).catch(() => []);
 
     // Collect all leaguemate Sleeper user IDs across all leagues
@@ -142,7 +193,6 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
     }));
 
     const enriched = await enrichProfilesWithDraftClass(baseEnriched);
-
     const totalProfiled = enriched.filter(p => p.totalPicksObserved > 0).length;
 
     res.json({
@@ -151,6 +201,39 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
       totalProfiled,
       unprofiled: leaguemateIds.size - totalProfiled,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/manager-search?q=TEXT -- search any manager by username (not limited to leaguemates)
+router.get('/manager-search', requireAuth, async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (q.length < 2) return res.json({ profiles: [] });
+
+    const profiles = await ManagerProfile.find({
+      username: { $regex: q, $options: 'i' },
+    }).limit(20).lean();
+
+    const baseEnriched = profiles.map(p => ({
+      sleeperId: p.sleeperId,
+      username: p.username,
+      scoutingNotes: p.scoutingNotes || [],
+      positionWeights: p.positionWeights,
+      earlyRoundPositionWeights: p.earlyRoundPositionWeights,
+      topColleges: Object.entries(p.collegeAffinities || {})
+        .sort(([, a], [, b]) => b - a).slice(0, 3).map(([name, count]) => ({ name, count })),
+      topNflTeams: Object.entries(p.nflTeamAffinities || {})
+        .sort(([, a], [, b]) => b - a).slice(0, 3).map(([team, count]) => ({ team, count })),
+      playerPickCounts: p.playerPickCounts,
+      totalPicksObserved: p.totalPicksObserved || 0,
+      draftsObserved: p.draftsObserved?.length || 0,
+      lastUpdated: p.lastUpdated,
+    }));
+
+    const enriched = await enrichProfilesWithDraftClass(baseEnriched);
+    res.json({ profiles: enriched });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

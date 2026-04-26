@@ -105,6 +105,8 @@ router.get('/active', requireAuth, async (req, res) => {
 
     for (const league of leagues) {
       if (!league.draftId) continue;
+      // 32-team leagues: skip draft recommendations entirely
+      if ((league.totalRosters || 0) >= 32) continue;
       try {
         const draftData = await sleeperService.getDraft(league.draftId);
         if (draftData.status !== 'drafting') continue;
@@ -176,6 +178,19 @@ router.get('/:draftId', requireAuth, async (req, res) => {
 
     const draftedIds = new Set(picks.map(p => p.player_id).filter(Boolean));
     const totalRosters = draftData.settings?.teams || 12;
+
+    // No recommendations for 32-team leagues — return board-only state
+    if (totalRosters >= 32) {
+      return res.json({
+        draftId,
+        status: draftData.status,
+        totalRosters,
+        noRecommendations: true,
+        noRecommendationsReason: '32-team leagues are not supported for draft recommendations',
+        picks: picks.slice(-20),
+      });
+    }
+
     const myPickSlot = draftData.draft_order?.[sleeperId];
     const picksMade = picks.length;
     const currentOverallPick = picksMade + 1;

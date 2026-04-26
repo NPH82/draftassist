@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, triggerLearn, seedRookies, syncSleeperIds, importSleeperPlayers } from '../services/api';
+import { getActiveDrafts, getDataStatus, refreshRankings, triggerLearn, seedRookies, syncSleeperIds, importSleeperPlayers } from '../services/api';
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
 import DraftTargets from '../components/DraftTargets/DraftTargets';
+import ScoutingHub from '../components/ScoutingHub/ScoutingHub';
 import { formatEta, timeAgo } from '../utils/formatting';
 
 export default function Dashboard() {
@@ -16,7 +17,6 @@ export default function Dashboard() {
   const [dataStatus, setDataStatus] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState(null);
-  const [managerProfiles, setManagerProfiles] = useState(null);
   const [learning, setLearning] = useState(false);
   const [learnMsg, setLearnMsg] = useState(null);
   const [seeding, setSeeding] = useState(false);
@@ -33,7 +33,6 @@ export default function Dashboard() {
       .catch(() => {})
       .finally(() => setLoadingDrafts(false));
     getDataStatus().then(setDataStatus).catch(() => {});
-    getManagerProfiles().then(setManagerProfiles).catch(() => {});
   }, []);
 
   const handleRefreshRankings = async () => {
@@ -95,8 +94,6 @@ export default function Dashboard() {
     try {
       const res = await triggerLearn();
       setLearnMsg(res.message);
-      // Re-fetch profiles after 2.5 min to show updated data
-      setTimeout(() => getManagerProfiles().then(setManagerProfiles).catch(() => {}), 150000);
     } catch {
       setLearnMsg('Scout failed -- check Render logs');
     } finally {
@@ -314,102 +311,8 @@ export default function Dashboard() {
         {/* Scout Opponents */}
         <section>
           <h2 className="font-semibold" style={{ marginBottom: '0.75rem' }}>Scout Opponents</h2>
-          <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {managerProfiles && (
-              <div className="flex gap-4 text-sm" style={{ flexWrap: 'wrap' }}>
-                <span><span className="text-muted">Leaguemates:</span> <span className="font-semibold">{managerProfiles.totalLeaguemates}</span></span>
-                <span><span className="text-muted">Profiled:</span> <span className={`font-semibold ${managerProfiles.totalProfiled > 0 ? 'text-green' : 'text-yellow'}`}>{managerProfiles.totalProfiled}</span></span>
-                <span><span className="text-muted">No data yet:</span> <span className="font-semibold text-muted">{managerProfiles.unprofiled}</span></span>
-              </div>
-            )}
-
-            {learnMsg && (
-              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
-                {learnMsg}
-              </div>
-            )}
-
-            <button
-              className="btn btn-secondary text-sm"
-              onClick={handleLearn}
-              disabled={learning}
-            >
-              {learning ? 'Scanning draft history...' : 'Scout All Opponents Now'}
-            </button>
-            <div className="text-xs text-muted">
-              Scans completed drafts across your leagues and leaguemates' other leagues. Already-processed drafts are skipped automatically.
-            </div>
-
-            {/* Manager profile cards */}
-            {managerProfiles?.profiles?.filter(p => p.totalPicksObserved > 0).length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
-                <div className="text-xs font-semibold text-muted" style={{ marginBottom: '0.1rem' }}>Known tendencies</div>
-                {managerProfiles.profiles
-                  .filter(p => p.totalPicksObserved > 0)
-                  .sort((a, b) => b.totalPicksObserved - a.totalPicksObserved)
-                  .map(p => (
-                    <div key={p.sleeperId} style={{ background: 'var(--bg-primary)', borderRadius: 6, padding: '0.6rem 0.75rem', border: '1px solid var(--border)' }}>
-                      <div className="flex justify-between items-center" style={{ marginBottom: '0.3rem' }}>
-                        <span className="font-semibold text-sm">{p.username || p.sleeperId}</span>
-                        <span className="text-xs text-muted">{p.draftsObserved} draft{p.draftsObserved !== 1 ? 's' : ''} · {p.totalPicksObserved} picks</span>
-                      </div>
-
-                      {/* Scouting notes */}
-                      {p.scoutingNotes?.length > 0 ? (
-                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.4rem' }}>
-                          {p.scoutingNotes.map((note, i) => (
-                            <li key={i} className="text-xs text-secondary">
-                              <span style={{ color: 'var(--yellow)', marginRight: '0.3rem' }}>!</span>{note}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <div className="text-xs text-muted" style={{ marginBottom: '0.4rem' }}>Not enough data for tendencies yet</div>
-                      )}
-
-                      {/* College + NFL team row */}
-                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        {p.topColleges?.length > 0 && (
-                          <div className="text-xs text-muted">
-                            <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>Colleges: </span>
-                            {p.topColleges.map(c => c.name).join(', ')}
-                          </div>
-                        )}
-                        {p.topNflTeams?.length > 0 && (
-                          <div className="text-xs text-muted">
-                            <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>NFL Teams: </span>
-                            {p.topNflTeams.map(t => t.team).join(', ')}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Favorite 2026 draft class players */}
-                      {p.favoriteDraftClassPlayers?.length > 0 && (
-                        <div style={{ marginTop: '0.4rem' }}>
-                          <div className="text-xs font-semibold text-muted" style={{ marginBottom: '0.2rem' }}>2026 Targets:</div>
-                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                            {p.favoriteDraftClassPlayers.map((fp, i) => (
-                              <span key={i} style={{
-                                background: 'var(--bg-secondary)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 4,
-                                padding: '0.1rem 0.4rem',
-                                fontSize: '0.75rem',
-                              }}>
-                                {fp.name}
-                                <span className="text-muted"> · {fp.position}</span>
-                                {fp.timesDrafted > 1 && (
-                                  <span style={{ color: 'var(--yellow)', marginLeft: '0.25rem' }}>×{fp.timesDrafted}</span>
-                                )}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-              </div>
-            )}
+          <div className="card">
+            <ScoutingHub onLearn={handleLearn} learning={learning} learnMsg={learnMsg} />
           </div>
         </section>
       </div>

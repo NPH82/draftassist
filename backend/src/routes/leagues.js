@@ -267,6 +267,9 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
     const league = await League.findOne({ sleeperId: leagueId }).lean();
     if (!league) return res.status(404).json({ error: 'League not found' });
     if (!league.draftId) return res.status(404).json({ error: 'No draft found for this league' });
+    if ((league.totalRosters || 0) >= 32) {
+      return res.json({ leagueId, draftId: league.draftId, noRecommendations: true, picks: [] });
+    }
 
     const [draftData, picks] = await Promise.all([
       sleeperService.getDraft(league.draftId),
