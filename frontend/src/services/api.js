@@ -21,6 +21,8 @@ export const getMe = () => api.get('/auth/me').then(r => r.data);
 export const getLeagues = (year = '2026') => api.get('/leagues', { params: { year } }).then(r => r.data);
 export const getLeague = (id) => api.get(`/leagues/${id}`).then(r => r.data);
 export const getLeagueAlerts = (id, days = 30) => api.get(`/leagues/${id}/alerts`, { params: { days } }).then(r => r.data);
+export const getLeagueDraftTargets = (id) => api.get(`/leagues/${id}/draft-targets`).then(r => r.data);
+export const submitDraftFeedback = (id, data) => api.post(`/leagues/${id}/draft-feedback`, data).then(r => r.data);
 
 // Players
 export const getPlayers = (params) => api.get('/players', { params }).then(r => r.data);

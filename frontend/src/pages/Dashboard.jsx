@@ -5,6 +5,7 @@ import { getActiveDrafts, getDataStatus, refreshRankings, getManagerProfiles, tr
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
+import DraftTargets from '../components/DraftTargets/DraftTargets';
 import { formatEta, timeAgo } from '../utils/formatting';
 
 export default function Dashboard() {
@@ -24,6 +25,7 @@ export default function Dashboard() {
   const [syncMsg, setSyncMsg] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState(null);
+  const [expandedLeague, setExpandedLeague] = useState(null);
 
   useEffect(() => {
     getActiveDrafts()
@@ -159,35 +161,62 @@ export default function Dashboard() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {leagues.map(lg => (
-                <div key={lg.leagueId} className="card">
-                  <div className="flex justify-between items-center" style={{ marginBottom: '0.4rem' }}>
-                    <div>
-                      <div className="font-semibold">{lg.name}</div>
-                      <div className="text-xs text-secondary">{lg.totalRosters}-team{lg.isSuperFlex ? ' SuperFlex' : ''}{lg.isPpr ? ' PPR' : ''}</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      {lg.myRoster?.winWindowLabel && (
-                        <WinWindowBadge label={lg.myRoster.winWindowLabel} reason={null} />
-                      )}
-                    </div>
-                  </div>
-                  {lg.myRoster?.winWindowReason && (
-                    <div className="text-xs text-muted">{lg.myRoster.winWindowReason}</div>
-                  )}
-                  {lg.myRoster?.positionalNeeds && (
-                    <div className="flex gap-2" style={{ marginTop: '0.4rem', flexWrap: 'wrap' }}>
-                      {Object.entries(lg.myRoster.positionalNeeds).map(([pos, need]) =>
-                        need !== 'low' ? (
-                          <span key={pos} className={`badge badge-${pos}`} style={{ opacity: need === 'high' ? 1 : 0.65 }}>
-                            {pos} {need === 'high' ? '!!' : '!'}
+              {leagues.map(lg => {
+                const isExpanded = expandedLeague === lg.leagueId;
+                return (
+                  <div key={lg.leagueId}>
+                    <div
+                      className="card"
+                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                      onClick={() => setExpandedLeague(isExpanded ? null : lg.leagueId)}
+                    >
+                      <div className="flex justify-between items-center" style={{ marginBottom: '0.4rem' }}>
+                        <div>
+                          <div className="font-semibold">{lg.name}</div>
+                          <div className="text-xs text-secondary">{lg.totalRosters}-team{lg.isSuperFlex ? ' SuperFlex' : ''}{lg.isPpr ? ' PPR' : ''}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
+                          {lg.myRoster?.winWindowLabel && (
+                            <WinWindowBadge label={lg.myRoster.winWindowLabel} reason={null} />
+                          )}
+                          <span className="text-muted" style={{ fontSize: '1rem' }}>
+                            {isExpanded ? '▲' : '▼'}
                           </span>
-                        ) : null
+                        </div>
+                      </div>
+                      {lg.myRoster?.winWindowReason && (
+                        <div className="text-xs text-muted">{lg.myRoster.winWindowReason}</div>
+                      )}
+                      {lg.myRoster?.positionalNeeds && (
+                        <div className="flex gap-2" style={{ marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                          {Object.entries(lg.myRoster.positionalNeeds).map(([pos, need]) =>
+                            need !== 'low' ? (
+                              <span key={pos} className={`badge badge-${pos}`} style={{ opacity: need === 'high' ? 1 : 0.65 }}>
+                                {pos} {need === 'high' ? '!!' : '!'}
+                              </span>
+                            ) : null
+                          )}
+                        </div>
                       )}
                     </div>
-                  )}
-                </div>
-              ))}
+
+                    {/* Inline draft targets panel */}
+                    {isExpanded && (
+                      <div
+                        style={{
+                          marginTop: '0.5rem',
+                          padding: '0.85rem',
+                          background: 'var(--bg-card, #1a1a2e)',
+                          borderRadius: 10,
+                          border: '1px solid var(--border, #2a2a3e)',
+                        }}
+                      >
+                        <DraftTargets leagueId={lg.leagueId} draftId={lg.draftId} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>

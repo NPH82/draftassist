@@ -154,6 +154,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
 
     res.json({
       draftId,
+      leagueId: league?.sleeperId || null,
       status: draftData.status,
       currentPick: currentOverallPick,
       myNextPick: myNextPickNumber,

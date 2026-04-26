@@ -41,6 +41,16 @@ const managerProfileSchema = new mongoose.Schema({
   // Human-readable scouting note (generated)
   scoutingNotes: [String],
 
+  // Pre-draft target feedback: agree/disagree on recommended targets per pick
+  targetFeedback: [{
+    leagueId: String,
+    pickNumber: Number,
+    recommendedPlayerId: String,
+    agreed: Boolean,
+    preferredPlayerId: String,  // set when disagreed and user chose alternate
+    createdAt: { type: Date, default: Date.now },
+  }],
+
   lastUpdated: { type: Date, default: Date.now },
 }, { timestamps: true });
 

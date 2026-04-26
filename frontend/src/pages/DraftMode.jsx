@@ -7,6 +7,7 @@ import TradePanel from '../components/TradePanel/TradePanel';
 import AlertContainer from '../components/Alerts/AlertContainer';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
+import DraftTargets from '../components/DraftTargets/DraftTargets';
 import { DraftProvider, useDraft } from '../context/DraftContext';
 import { formatEta } from '../utils/formatting';
 
@@ -24,6 +25,9 @@ function DraftModeInner({ draftId }) {
   const [activeTradePlayer, setActiveTradePlayer] = useState(null);
   const [filter, setFilter] = useState('ALL');
   const [showQueue, setShowQueue] = useState(false);
+  const [showTargets, setShowTargets] = useState(false);
+
+  const leagueId = ds?.leagueId || null;
 
   if (loading) {
     return (
@@ -85,8 +89,33 @@ function DraftModeInner({ draftId }) {
           >
             Queue {queue.length > 0 ? `(${queue.length})` : ''}
           </button>
+
+          {leagueId && (
+            <button
+              className={`btn ${showTargets ? 'btn-primary' : 'btn-secondary'} text-sm`}
+              style={{ padding: '0.3rem 0.7rem' }}
+              onClick={() => setShowTargets(t => !t)}
+            >
+              {showTargets ? '▲ Targets' : '▼ Targets'}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Draft Targets panel (pre-draft / during draft) */}
+      {showTargets && leagueId && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.85rem',
+            background: 'var(--bg-card)',
+            borderRadius: 10,
+            border: '1px solid var(--border, #2a2a3e)',
+          }}
+        >
+          <DraftTargets leagueId={leagueId} draftId={draftId} />
+        </div>
+      )}
 
       {/* Queue (collapsible on mobile) */}
       {showQueue && (
