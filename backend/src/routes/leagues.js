@@ -38,6 +38,15 @@ function parseYearsExp(player = {}) {
   return Number.isFinite(value) ? value : null;
 }
 
+function normalizeName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function isSleeperDevyPlayer(sp = {}) {
   const yearsExp = parseYearsExp(sp);
   if (yearsExp === -1) return true;
@@ -753,6 +762,19 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
     const devyBySleeperID = Object.fromEntries(devyDbPlayers.map(p => [p.sleeperId, p]));
 
+    // Name-based roster map helps when local DB sleeperIds are stale/incorrect.
+    const rosteredNames = new Set(
+      [...allRosterIds]
+        .map((id) => {
+          const sp = sleeperPlayerMap[id];
+          const fullName = sp
+            ? (sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim())
+            : '';
+          return normalizeName(fullName);
+        })
+        .filter(Boolean)
+    );
+
     // Build rostered devy list: DB record + owner info + Sleeper data
     const rosterList = [];
     for (const id of devyRosteredIds) {
@@ -810,7 +832,9 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       .filter(p => p.sleeperId && !devyRosteredIds.has(p.sleeperId))
       .map(p => {
         const sp = sleeperPlayerMap[p.sleeperId] || {};
-        // Skip players who have now graduated to the NFL (years_exp !== -1)
+        // Require an authoritative Sleeper match for available devy options.
+        if (!Object.keys(sp).length) return null;
+        // Skip players who have now graduated to the NFL (years_exp !== -1).
         const yearsExp = parseYearsExp(sp);
         if (yearsExp !== null && !isSleeperDevyPlayer(sp)) return null;
         return {
@@ -852,14 +876,17 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         // If tied to a Sleeper ID and already rostered/taxi, it's not available in this league.
         if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
 
+        // Fallback to name matching when sleeperId in DB is stale or wrong.
+        if (rosteredNames.has(normalizeName(p.name))) return false;
+
         const sp = p.sleeperId ? sleeperPlayerMap[p.sleeperId] : null;
         const yearsExp = parseYearsExp(sp || {});
         // Exclude players that are still devy in Sleeper data.
         if (isSleeperDevyPlayer(sp || {})) return false;
-        // Rookie pool should focus on current incoming/first-year NFL players.
-        if (yearsExp !== null && yearsExp > 0) return false;
-
-        return true;
+        // Rookie pool should focus on incoming/first-year NFL players only.
+        if (yearsExp !== null) return yearsExp === 0;
+        // If Sleeper lacks years_exp, require this year's draft class explicitly.
+        return Number(p.nflDraftYear) === currentYear;
       })
       .map((p) => ({
         sleeperId: p.sleeperId || null,
