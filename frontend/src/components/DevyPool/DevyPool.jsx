@@ -45,6 +45,11 @@ function DevyPlayerRow({ player, showOwner }) {
         <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.08rem' }}>
           {[player.college, player.devyClass ? `'${String(player.devyClass).slice(-2)} class` : null]
             .filter(Boolean).join(' · ')}
+          {player.fromPlayerNote && player.associatedPlayerName && (
+            <span style={{ color: 'var(--text-muted)', marginLeft: '0.4rem' }}>
+              via note on {player.associatedPlayerName}
+            </span>
+          )}
           {showOwner && player.ownerUsername && (
             <span style={{ color: 'var(--yellow)', marginLeft: '0.4rem' }}>→ {player.ownerUsername}</span>
           )}

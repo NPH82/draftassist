@@ -33,6 +33,30 @@ function fpEquivalentValue(player = {}, isDevy = false) {
   return 0;
 }
 
+function parseYearsExp(player = {}) {
+  const value = Number(player.years_exp);
+  return Number.isFinite(value) ? value : null;
+}
+
+function getPlayerAliasFromMetadata(metadata = {}, playerId) {
+  if (!metadata || !playerId) return null;
+
+  const possibleMaps = [
+    metadata.player_nicknames,
+    metadata.player_notes,
+    metadata.player_nickname,
+    metadata.player_note,
+  ].filter(Boolean);
+
+  for (const map of possibleMaps) {
+    if (map && typeof map === 'object' && !Array.isArray(map) && map[playerId]) {
+      return String(map[playerId]).trim();
+    }
+  }
+
+  return null;
+}
+
 function toInt(value) {
   const n = parseInt(value, 10);
   return Number.isFinite(n) ? n : null;
@@ -655,19 +679,40 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       console.warn('[DevyPool] Sleeper player map unavailable:', e.message);
     }
 
+    // Pull user metadata so we can honor player-level notes/nicknames used by
+    // many devy leagues to store the real devy prospect attached to an NFL ID.
+    let userMetaById = {};
+    try {
+      const users = await sleeperService.getLeagueUsers(leagueId);
+      userMetaById = Object.fromEntries((users || []).map(u => [u.user_id, u.metadata || {}]));
+    } catch (e) {
+      console.warn('[DevyPool] League user metadata unavailable:', e.message);
+    }
+
     // Collect every player ID across all rosters (active + taxi)
     const allRosterIds = new Set();
     const idToRoster = {};  // sleeperId -> { ownerId, username, onTaxi }
     for (const roster of league.rosters || []) {
       const active = roster.playerIds || [];
       const taxi = roster.taxiPlayerIds || [];
+      const ownerMeta = userMetaById[roster.ownerId] || {};
       for (const id of active) {
         allRosterIds.add(id);
-        if (!idToRoster[id]) idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: false };
+        const alias = getPlayerAliasFromMetadata(ownerMeta, id);
+        if (!idToRoster[id]) {
+          idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: false, devyAlias: alias || null };
+        } else if (!idToRoster[id].devyAlias && alias) {
+          idToRoster[id].devyAlias = alias;
+        }
       }
       for (const id of taxi) {
         allRosterIds.add(id);
-        if (!idToRoster[id]) idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: true };
+        const alias = getPlayerAliasFromMetadata(ownerMeta, id);
+        if (!idToRoster[id]) {
+          idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: true, devyAlias: alias || null };
+        } else if (!idToRoster[id].devyAlias && alias) {
+          idToRoster[id].devyAlias = alias;
+        }
       }
     }
 
@@ -678,10 +723,17 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
     for (const id of allRosterIds) {
       const sp = sleeperPlayerMap[id];
-      if (!sp) continue;
-      if (sp.years_exp === -1) {
+      const owner = idToRoster[id] || {};
+      const yearsExp = parseYearsExp(sp || {});
+      const officialName = sp
+        ? (sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim())
+        : '';
+      const alias = owner.devyAlias ? String(owner.devyAlias).trim() : null;
+      const hasDistinctAlias = !!(alias && (!officialName || alias.toLowerCase() !== officialName.toLowerCase()));
+
+      if (yearsExp === -1 || hasDistinctAlias) {
         devyRosteredIds.add(id);
-      } else if (sp.years_exp === 0 && sp.team) {
+      } else if (yearsExp === 0 && sp && sp.team) {
         // years_exp: 0 + has a team = just drafted into NFL this year
         graduatedIds.add(id);
       }
@@ -699,15 +751,20 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     for (const id of devyRosteredIds) {
       const sp = sleeperPlayerMap[id] || {};
       const db = devyBySleeperID[id];
-      const owner = idToRoster[id];
+      const owner = idToRoster[id] || {};
 
-      const name = db?.name || sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
+      const officialName = db?.name || sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
+      const alias = owner.devyAlias ? String(owner.devyAlias).trim() : null;
+      const isAliasName = !!(alias && alias.toLowerCase() !== officialName.toLowerCase());
+      const name = isAliasName ? alias : officialName;
       const position = db?.position || sp.position || '?';
       const college = db?.college || sp.college || null;
 
       rosterList.push({
         sleeperId: id,
         name,
+        associatedPlayerName: isAliasName ? officialName : null,
+        fromPlayerNote: isAliasName,
         position,
         college,
         devyClass: db?.devyClass || null,
@@ -716,9 +773,9 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         fantasyProsValue: db?.fantasyProsValue || 0,
         fantasyProsRank: db?.fantasyProsRank || null,
         dasScore: db?.dasScore || null,
-        ownerId: owner.ownerId,
-        ownerUsername: owner.username,
-        onTaxi: owner.onTaxi,
+        ownerId: owner.ownerId || null,
+        ownerUsername: owner.username || null,
+        onTaxi: !!owner.onTaxi,
         inOurDb: !!db,
       });
     }
@@ -747,7 +804,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       .map(p => {
         const sp = sleeperPlayerMap[p.sleeperId] || {};
         // Skip players who have now graduated to the NFL (years_exp !== -1)
-        if (sp.sleeperId && sp.years_exp !== undefined && sp.years_exp !== -1) return null;
+        const yearsExp = parseYearsExp(sp);
+        if (yearsExp !== null && yearsExp !== -1) return null;
         return {
           sleeperId: p.sleeperId,
           name: p.name,
@@ -788,10 +846,11 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
 
         const sp = p.sleeperId ? sleeperPlayerMap[p.sleeperId] : null;
+        const yearsExp = parseYearsExp(sp || {});
         // Exclude players that are still devy in Sleeper data.
-        if (sp && sp.years_exp === -1) return false;
+        if (yearsExp === -1) return false;
         // Rookie pool should focus on current incoming/first-year NFL players.
-        if (sp && sp.years_exp !== undefined && sp.years_exp > 0) return false;
+        if (yearsExp !== null && yearsExp > 0) return false;
 
         return true;
       })
@@ -830,7 +889,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const unknownIds = [...devyRosteredIds].filter(id => !devyBySleeperID[id]);
     const unknownPlayers = unknownIds.map(id => {
       const sp = sleeperPlayerMap[id] || {};
-      const owner = idToRoster[id];
+      const owner = idToRoster[id] || {};
       const name = sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
       return {
         sleeperId: id,
@@ -843,9 +902,9 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         fantasyProsValue: 0,
         fantasyProsRank: null,
         dasScore: null,
-        ownerId: owner.ownerId,
-        ownerUsername: owner.username,
-        onTaxi: owner.onTaxi,
+        ownerId: owner.ownerId || null,
+        ownerUsername: owner.username || null,
+        onTaxi: !!owner.onTaxi,
         inOurDb: false,
       };
     });

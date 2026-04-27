@@ -20,6 +20,11 @@ const { getAllPlayers } = require('./sleeperService');
 
 const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
 
+function parseYearsExp(player = {}) {
+  const value = Number(player.years_exp);
+  return Number.isFinite(value) ? value : null;
+}
+
 // ---------------------------------------------------------------------------
 // importSleeperPlayers
 // ---------------------------------------------------------------------------
@@ -138,7 +143,8 @@ async function importDevyPlayers() {
 
   for (const [id, sp] of Object.entries(sleeperMap)) {
     // Devy player: years_exp === -1 means they have never been in the NFL
-    if (sp.years_exp !== -1) { skipped++; continue; }
+    const yearsExp = parseYearsExp(sp);
+    if (yearsExp !== -1) { skipped++; continue; }
 
     const pos = sp.position;
     if (!pos || !SKILL_POSITIONS.has(pos)) { skipped++; continue; }
