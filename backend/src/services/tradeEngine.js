@@ -89,7 +89,7 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
  * last safe pick for the target player.  Trading back lets us drop a few spots,
  * still land the target, and keep extra capital.
  */
-async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPick, allRosters, userId, ourPositionalNeed = 'WR', teams = 12 }) {
+async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPick, allRosters, userId, playerMap = {}, ourPositionalNeed = 'WR', teams = 12 }) {
   const suggestions = [];
 
   for (const roster of allRosters) {
@@ -100,10 +100,15 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
     const picksBack = theirNextPick - ourPickNumber;
     const targetMarketPick = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || availableUntilPick;
 
+    const theirTradablePlayers = (roster.playerIds || roster.allPlayerIds || [])
+      .map(id => playerMap[id])
+      .filter(p => p && p.name && ((p.ktcValue || 0) > 0 || (p.fantasyProsValue || 0) > 0));
+
     const { packages, ourPickValue, theirPickValue, rawSurplus, requestBack } = buildTradeDownPackages({
       ourPickNumber,
       theirPickNumber: theirNextPick,
       ourPositionalNeed,
+      theirPlayers: theirTradablePlayers,
       teams,
     });
 
@@ -143,10 +148,15 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
       const picksBack = theirNextPick - ourPickNumber;
       const targetMarketPick = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || availableUntilPick;
 
+      const theirTradablePlayers = (roster.playerIds || roster.allPlayerIds || [])
+        .map(id => playerMap[id])
+        .filter(p => p && p.name && ((p.ktcValue || 0) > 0 || (p.fantasyProsValue || 0) > 0));
+
       const { packages, ourPickValue, theirPickValue, rawSurplus, requestBack } = buildTradeDownPackages({
         ourPickNumber,
         theirPickNumber: theirNextPick,
         ourPositionalNeed,
+        theirPlayers: theirTradablePlayers,
         teams,
       });
 
@@ -311,71 +321,48 @@ function fallbackTradeDownPackage({ ourPickNumber, theirPickNumber, teams = 12 }
 /**
  * Build concrete package options to trade UP from ourPickNumber → theirPickNumber.
  *
- * Strategy:
- *  - Applies a 10% overpay premium (moving up costs slightly more than fair value)
- *  - Max 2 assets given per package (pick + 1 player or future pick)
- *  - Player candidates must be proportionate: value within [60%, 150%] of the gap
- *    to avoid suggesting a 30 FP player when you only need to add 11 FP
- *  - Up to 3 packages: positional-fit player, best-fit-value player, future pick
- *
- * All values are in FP scale (e.g. 1.01 = 68, Braelon Allen ≈ 21).
+ * Moving up ALWAYS requires adding something — there are no straight swaps here.
+ * Player candidates are sorted by positional fit first, then closest value to the gap.
+ * All values are in FP scale (e.g. 1.01 = 68 FP).
  */
 function buildTradeUpPackages({ ourPickNumber, theirPickNumber, ourPlayers = [], theirPositionalNeed, teams = 12 }) {
-  const OVERPAY = 1.10;   // 10% — enough to make it attractive, not egregious
+  const OVERPAY = 1.10;  // 10% premium to make the offer attractive
   const ourFp   = fpPickValue(ourPickNumber);
   const theirFp = fpPickValue(theirPickNumber);
-  const rawGap      = theirFp - ourFp;        // positive = their pick is more valuable
-  const neededToAdd = Math.max(0, rawGap * OVERPAY);
+  const rawGap      = theirFp - ourFp;  // positive = their pick is more valuable
+  // Always require adding something — even near-even swaps need a sweetener when moving up.
+  const neededToAdd = Math.max(rawGap * OVERPAY, ourFp * 0.08);
 
   const packages = [];
 
-  // Near-even: gap <= 5 FP (~1 pick spot) — straight swap is the right offer
-  if (rawGap <= 5) {
-    packages.push({
-      label: 'Straight Swap',
-      giving:    [{ type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) }],
-      receiving: [{ type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) }],
-      giveTotal:    ourFp,
-      receiveTotal: theirFp,
-      rawGap,
-      neededToAdd: 0,
-      positionalFit: false,
-      fairness: 'slight-favour-them',
-      notes: `Only a ${rawGap.toFixed(1)} FP gap — a straight swap is a reasonable starting offer.`,
-    });
-    return { packages, ourPickValue: ourFp, theirPickValue: theirFp, rawGap, neededToAdd };
-  }
-
-  // Build list of tradeable players.
-  // KEY: only include players whose value is within [60%, 150%] of neededToAdd.
-  // This prevents suggesting a 25 FP star to bridge a 10 FP gap.
-  const lo = neededToAdd * 0.60;
-  const hi = neededToAdd * 1.50;
-
-  const tradeable = ourPlayers
+  // Rank tradeable players: positional fit first, then closest value to neededToAdd.
+  // No strict range filter — we want real players to always appear.
+  const withValues = ourPlayers
     .map(p => ({ ...p, fpVal: playerFpValue(p) }))
-    .filter(p => p.fpVal >= lo && p.fpVal <= hi)  // proportionate range only
+    .filter(p => p.fpVal > 0)
     .sort((a, b) => {
       const aPosMatch = a.position === theirPositionalNeed ? 1 : 0;
       const bPosMatch = b.position === theirPositionalNeed ? 1 : 0;
       if (bPosMatch !== aPosMatch) return bPosMatch - aPosMatch;
-      // prefer player closest to neededToAdd
-      return Math.abs(a.fpVal - neededToAdd) - Math.abs(b.fpVal - neededToAdd);
+      // Among same positional-fit tier, prefer value closest to neededToAdd (slightly over preferred)
+      const aOver = a.fpVal - neededToAdd;
+      const bOver = b.fpVal - neededToAdd;
+      if (aOver >= 0 && bOver >= 0) return aOver - bOver;  // both over: pick the smaller overpay
+      if (aOver < 0 && bOver < 0)  return bOver - aOver;   // both under: pick the larger value
+      return aOver >= 0 ? -1 : 1;                          // slightly over is better than slightly under
     });
 
   const seenPlayers = new Set();
 
-  // Option A: Player that fills their positional need (or closest available)
-  const posMatch = tradeable.find(p => p.position === theirPositionalNeed);
-  const bestAny  = tradeable[0]; // overall best fit to gap (already range-filtered)
-
-  for (const candidate of [posMatch, bestAny].filter(Boolean)) {
+  // Option A/B: Best positional-fit player, then best overall value player
+  for (const candidate of withValues.slice(0, 4)) {
     if (seenPlayers.has(candidate.name)) continue;
+    if (packages.length >= 2) break;
     seenPlayers.add(candidate.name);
     const tv = playerTradeValues(candidate);
-    const giveTotal   = ourFp + candidate.fpVal;
-    const overpayPct  = giveTotal > 0 ? Math.round(((giveTotal - theirFp) / theirFp) * 100) : 0;
-    const isPosFit    = candidate.position === theirPositionalNeed;
+    const giveTotal  = ourFp + candidate.fpVal;
+    const overpayPct = theirFp > 0 ? Math.round(((giveTotal - theirFp) / theirFp) * 100) : 0;
+    const isPosFit   = candidate.position === theirPositionalNeed;
     packages.push({
       label: `${formatPick(ourPickNumber, teams)} + ${candidate.name}`,
       giving: [
@@ -389,19 +376,18 @@ function buildTradeUpPackages({ ourPickNumber, theirPickNumber, ourPlayers = [],
       rawGap,
       neededToAdd,
       positionalFit: isPosFit,
-      overpayPct,
-      fairness: overpayPct <= 5 ? 'fair' : overpayPct <= 15 ? 'slight-favour-them' : 'aggressive',
+      overpayPct: Math.abs(overpayPct),
+      fairness: Math.abs(overpayPct) <= 8 ? 'fair' : Math.abs(overpayPct) <= 20 ? 'slight-favour-them' : 'aggressive',
       notes: isPosFit
-        ? `${candidate.name} fills their ${theirPositionalNeed} need — highest acceptance chance. You give ~${overpayPct}% more than fair value.`
-        : `Bridges the ${rawGap.toFixed(1)} FP gap. Not their biggest need but adds solid value (~${overpayPct}% over fair).`,
+        ? `${candidate.name} fills their ${theirPositionalNeed} need — highest acceptance chance. ~${Math.abs(overpayPct)}% over fair.`
+        : `Adds value to bridge the gap. ~${Math.abs(overpayPct)}% ${overpayPct >= 0 ? 'over' : 'under'} fair value.`,
     });
-    if (packages.length >= 2) break;
   }
 
-  // Option C (always): Future pick — keeps roster intact
+  // Always add future-pick option (capital-only, no roster disruption)
   const futurePick = futurePickForGap(neededToAdd);
   const futureGiveTotal  = ourFp + futurePick.fpValue;
-  const futureOverpayPct = futureGiveTotal > 0 ? Math.round(((futureGiveTotal - theirFp) / theirFp) * 100) : 0;
+  const futureOverpayPct = theirFp > 0 ? Math.round(((futureGiveTotal - theirFp) / theirFp) * 100) : 0;
   packages.push({
     label: `${formatPick(ourPickNumber, teams)} + ${futurePick.label}`,
     giving: [
@@ -414,9 +400,9 @@ function buildTradeUpPackages({ ourPickNumber, theirPickNumber, ourPlayers = [],
     rawGap,
     neededToAdd,
     positionalFit: false,
-    overpayPct: futureOverpayPct,
-    fairness: futureOverpayPct <= 5 ? 'fair' : futureOverpayPct <= 15 ? 'slight-favour-them' : 'aggressive',
-    notes: `Capital-only offer — no roster disruption. You give ~${futureOverpayPct}% over fair value.`,
+    overpayPct: Math.abs(futureOverpayPct),
+    fairness: Math.abs(futureOverpayPct) <= 8 ? 'fair' : Math.abs(futureOverpayPct) <= 15 ? 'slight-favour-them' : 'aggressive',
+    notes: `Capital-only offer — no roster disruption. ~${Math.abs(futureOverpayPct)}% over fair value.`,
   });
 
   return { packages, ourPickValue: ourFp, theirPickValue: theirFp, rawGap, neededToAdd };
@@ -424,10 +410,12 @@ function buildTradeUpPackages({ ourPickNumber, theirPickNumber, ourPlayers = [],
 
 /**
  * Build package options to trade DOWN from ourPickNumber → theirPickNumber.
- * We request back ~88% of the surplus (sweetens the deal for the other manager).
- * Max complexity: their pick + 1 future pick returned to us.
+ * We give our earlier pick; we receive their later pick + a player or future pick back.
+ * Straight swaps are never offered here — when trading down you always gain something.
+ *
+ * @param {object[]} theirPlayers - The partner manager's tradeable players (for player-return option)
  */
-function buildTradeDownPackages({ ourPickNumber, theirPickNumber, ourPositionalNeed, teams = 12 }) {
+function buildTradeDownPackages({ ourPickNumber, theirPickNumber, ourPositionalNeed, theirPlayers = [], teams = 12 }) {
   const UNDERPAY = 0.88;
   const ourFp    = fpPickValue(ourPickNumber);
   const theirFp  = fpPickValue(theirPickNumber);
@@ -436,7 +424,48 @@ function buildTradeDownPackages({ ourPickNumber, theirPickNumber, ourPositionalN
 
   const packages = [];
 
-  // Option A: Swap + a future pick returned to us
+  // Option A: Their pick + a player from their roster that fills our need (best fit)
+  const theirTradeable = theirPlayers
+    .map(p => ({ ...p, fpVal: playerFpValue(p) }))
+    .filter(p => p.fpVal > 0)
+    .sort((a, b) => {
+      const aFit = a.position === ourPositionalNeed ? 1 : 0;
+      const bFit = b.position === ourPositionalNeed ? 1 : 0;
+      if (bFit !== aFit) return bFit - aFit;
+      // Prefer value closest to requestBack (slightly over preferred)
+      const aOver = a.fpVal - requestBack;
+      const bOver = b.fpVal - requestBack;
+      if (aOver >= 0 && bOver >= 0) return aOver - bOver;
+      if (aOver < 0 && bOver < 0)  return bOver - aOver;
+      return aOver >= 0 ? -1 : 1;
+    });
+
+  if (theirTradeable.length > 0) {
+    const candidate = theirTradeable[0];
+    const tv = playerTradeValues(candidate);
+    const receiveTotal = theirFp + candidate.fpVal;
+    const isPosFit = candidate.position === ourPositionalNeed;
+    packages.push({
+      label: `${formatPick(ourPickNumber, teams)} → ${formatPick(theirPickNumber, teams)} + ${candidate.name}`,
+      giving:    [{ type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) }],
+      receiving: [
+        { type: 'pick',   label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) },
+        { type: 'player', label: candidate.name, position: candidate.position,
+          fpValue: tv.fpValue, ktcValue: tv.ktcValue, fpFromKtc: tv.fpFromKtc, consensus: tv.consensus },
+      ],
+      giveTotal:    ourFp,
+      receiveTotal,
+      rawSurplus,
+      requestBack,
+      capitalGained: candidate.fpVal,
+      positionalFit: isPosFit,
+      notes: isPosFit
+        ? `${candidate.name} fills your ${ourPositionalNeed} need — drop a spot and add positional value.`
+        : `${candidate.name} returns fair value for the spot you're dropping.`,
+    });
+  }
+
+  // Always add future-pick return option
   const returnPick = futurePickForGap(requestBack);
   packages.push({
     label: `${formatPick(ourPickNumber, teams)} → ${formatPick(theirPickNumber, teams)} + ${returnPick.label}`,
@@ -450,24 +479,8 @@ function buildTradeDownPackages({ ourPickNumber, theirPickNumber, ourPositionalN
     rawSurplus,
     requestBack,
     capitalGained: returnPick.fpValue,
-    notes: `Gain a ${returnPick.label} (~${returnPick.fpValue} FP / ~${Math.round(returnPick.fpValue * FP_TO_KTC).toLocaleString()} KTC) while still landing your target.`,
+    notes: `Gain a ${returnPick.label} (~${returnPick.fpValue} FP) while still landing your target.`,
   });
-
-  // Option B: Near-even straight swap (only when surplus is small — ≤6 FP, ~1-2 pick spots)
-  if (rawSurplus <= 6) {
-    packages.push({
-      label: `${formatPick(ourPickNumber, teams)} → ${formatPick(theirPickNumber, teams)} (straight swap)`,
-      giving:    [{ type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) }],
-      receiving: [{ type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) }],
-      giveTotal:    ourFp,
-      receiveTotal: theirFp,
-      rawSurplus,
-      requestBack: 0,
-      capitalGained: 0,
-      fairness: 'slight-favour-them',
-      notes: `Small drop (${rawSurplus.toFixed(1)} FP) — a straight swap is a reasonable starting point.`,
-    });
-  }
 
   return { packages, ourPickValue: ourFp, theirPickValue: theirFp, rawSurplus, requestBack };
 }

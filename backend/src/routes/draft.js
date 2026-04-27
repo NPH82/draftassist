@@ -652,7 +652,7 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
     const myPlayerIds = (myRoster?.allPlayerIds?.length ? myRoster.allPlayerIds : myRoster?.playerIds || []);
     const myTradablePlayers = myPlayerIds
       .map(id => playerMap[id])
-      .filter(p => p && p.name && ((p.ktcValue || 0) > 0 || (p.fantasyProsValue || 0) > 0))
+      .filter(p => p && p.name)  // include all known players; 0-value ones are handled in the engine
       // Sort by best available value: prefer FP consensus, fall back to KTC-normalized
       .sort((a, b) => {
         const aVal = (a.fantasyProsValue || 0) > 0 ? (a.fantasyProsValue || 0)
@@ -707,6 +707,7 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
             ourPickNumber: myNextPickNumber,
             availableUntilPick: safeUntil,
             allRosters,
+            playerMap,
             userId: sleeperId,
             ourPositionalNeed,
             teams: totalRosters,
