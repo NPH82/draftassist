@@ -649,7 +649,7 @@ router.get('/:draftId/trades', requireAuth, async (req, res) => {
 
     // Build a list of the user's tradeable players for package generation
     const myRoster = allRosters.find(r => r.ownerId === sleeperId);
-    const myPlayerIds = myRoster?.playerIds || myRoster?.allPlayerIds || [];
+    const myPlayerIds = (myRoster?.allPlayerIds?.length ? myRoster.allPlayerIds : myRoster?.playerIds || []);
     const myTradablePlayers = myPlayerIds
       .map(id => playerMap[id])
       .filter(p => p && p.name && ((p.ktcValue || 0) > 0 || (p.fantasyProsValue || 0) > 0))

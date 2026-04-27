@@ -61,11 +61,15 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
       teams,
     });
 
+    const ensuredPackages = (packages && packages.length > 0)
+      ? packages
+      : [fallbackTradeUpPackage({ ourPickNumber, theirPickNumber: theirNextPick, teams })];
+
     suggestions.push({
       type: 'trade-up',
-      targetManager: { sleeperId: roster.ownerId, username: roster.ownerUsername },
+      targetManager: { sleeperId: roster.ownerId, username: roster.ownerUsername || roster.ownerName || roster.ownerId },
       targetPlayer,
-      packages,
+      packages: ensuredPackages,
       pickComparison: {
         ourPick:    { overall: ourPickNumber,  label: formatPick(ourPickNumber, teams),  fpValue: ourPickValue,  ktcValue: pickKtcValue(ourPickNumber) },
         theirPick:  { overall: theirNextPick,  label: formatPick(theirNextPick, teams),  fpValue: theirPickValue, ktcValue: pickKtcValue(theirNextPick) },
@@ -103,11 +107,15 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
       teams,
     });
 
+    const ensuredPackages = (packages && packages.length > 0)
+      ? packages
+      : [fallbackTradeDownPackage({ ourPickNumber, theirPickNumber: theirNextPick, teams })];
+
     suggestions.push({
       type: 'trade-down',
       targetManager: { sleeperId: roster.ownerId, username: roster.ownerUsername || roster.ownerName },
       targetPlayer,
-      packages,
+      packages: ensuredPackages,
       pickComparison: {
         ourPick:   { overall: ourPickNumber,  label: formatPick(ourPickNumber, teams),  fpValue: ourPickValue,  ktcValue: pickKtcValue(ourPickNumber) },
         theirPick: { overall: theirNextPick,  label: formatPick(theirNextPick, teams),  fpValue: theirPickValue, ktcValue: pickKtcValue(theirNextPick) },
@@ -142,11 +150,15 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
         teams,
       });
 
+      const ensuredPackages = (packages && packages.length > 0)
+        ? packages
+        : [fallbackTradeDownPackage({ ourPickNumber, theirPickNumber: theirNextPick, teams })];
+
       suggestions.push({
         type: 'trade-down',
         targetManager: { sleeperId: roster.ownerId, username: roster.ownerUsername || roster.ownerName },
         targetPlayer,
-        packages,
+        packages: ensuredPackages,
         pickComparison: {
           ourPick:   { overall: ourPickNumber,  label: formatPick(ourPickNumber, teams),  fpValue: ourPickValue,  ktcValue: pickKtcValue(ourPickNumber) },
           theirPick: { overall: theirNextPick,  label: formatPick(theirNextPick, teams),  fpValue: theirPickValue, ktcValue: pickKtcValue(theirNextPick) },
@@ -256,6 +268,44 @@ function futurePickForGap(targetFpValue) {
   if (targetFpValue >=  7) return { label: '2027 2nd (Late)',  fpValue:  9 };
   if (targetFpValue >=  4) return { label: '2027 3rd Round',   fpValue:  5 };
   return                          { label: '2027 4th Round',   fpValue:  3 };
+}
+
+function fallbackTradeUpPackage({ ourPickNumber, theirPickNumber, teams = 12 }) {
+  const ourFp = fpPickValue(ourPickNumber);
+  const theirFp = fpPickValue(theirPickNumber);
+  return {
+    label: `${formatPick(ourPickNumber, teams)} + 2027 2nd (Mid)`,
+    giving: [
+      { type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) },
+      { type: 'pick', label: '2027 2nd (Mid)', fpValue: 12, ktcValue: Math.round(12 * FP_TO_KTC) },
+    ],
+    receiving: [
+      { type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) },
+    ],
+    giveTotal: ourFp + 12,
+    receiveTotal: theirFp,
+    fallback: true,
+    notes: 'Fallback package: pick swap plus a future 2nd when no custom package could be generated.',
+  };
+}
+
+function fallbackTradeDownPackage({ ourPickNumber, theirPickNumber, teams = 12 }) {
+  const ourFp = fpPickValue(ourPickNumber);
+  const theirFp = fpPickValue(theirPickNumber);
+  return {
+    label: `${formatPick(ourPickNumber, teams)} -> ${formatPick(theirPickNumber, teams)} + 2027 3rd Round`,
+    giving: [
+      { type: 'pick', label: formatPick(ourPickNumber, teams), fpValue: ourFp, ktcValue: pickKtcValue(ourPickNumber) },
+    ],
+    receiving: [
+      { type: 'pick', label: formatPick(theirPickNumber, teams), fpValue: theirFp, ktcValue: pickKtcValue(theirPickNumber) },
+      { type: 'pick', label: '2027 3rd Round', fpValue: 5, ktcValue: Math.round(5 * FP_TO_KTC) },
+    ],
+    giveTotal: ourFp,
+    receiveTotal: theirFp + 5,
+    fallback: true,
+    notes: 'Fallback package: small capital return when no custom package could be generated.',
+  };
 }
 
 /**

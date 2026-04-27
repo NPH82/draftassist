@@ -381,7 +381,36 @@ function HintTradeCard({ suggestion, direction }) {
   const accentColor = isUp ? 'var(--green)' : 'var(--yellow)';
   const manager = suggestion.targetManager?.username || 'Unknown';
   const cmp = suggestion.pickComparison;
-  const packages = suggestion.packages || [];
+  const packages = (suggestion.packages && suggestion.packages.length > 0)
+    ? suggestion.packages
+    : (() => {
+        const ourPick = cmp?.ourPick;
+        const theirPick = cmp?.theirPick;
+        if (!ourPick || !theirPick) return [];
+        const baseFuture = isUp
+          ? { label: '2027 2nd (Mid)', fpValue: 12 }
+          : { label: '2027 3rd Round', fpValue: 5 };
+        return [{
+          label: isUp ? `${ourPick.label} + ${baseFuture.label}` : `${ourPick.label} -> ${theirPick.label} + ${baseFuture.label}`,
+          giving: isUp
+            ? [
+                { type: 'pick', label: ourPick.label, fpValue: ourPick.fpValue || 0 },
+                { type: 'pick', label: baseFuture.label, fpValue: baseFuture.fpValue },
+              ]
+            : [
+                { type: 'pick', label: ourPick.label, fpValue: ourPick.fpValue || 0 },
+              ],
+          receiving: isUp
+            ? [{ type: 'pick', label: theirPick.label, fpValue: theirPick.fpValue || 0 }]
+            : [
+                { type: 'pick', label: theirPick.label, fpValue: theirPick.fpValue || 0 },
+                { type: 'pick', label: baseFuture.label, fpValue: baseFuture.fpValue },
+              ],
+          fairness: 'slight-favour-them',
+          overpayPct: null,
+          notes: 'Fallback package generated from pick values.',
+        }];
+      })();
   const visiblePkgs = showAll ? packages : packages.slice(0, 1);
 
   const ourFp   = cmp?.ourPick?.fpValue  || 0;
