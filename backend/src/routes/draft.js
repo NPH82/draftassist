@@ -271,22 +271,71 @@ router.get('/active', requireAuth, async (req, res) => {
         const draftData = await sleeperService.getDraft(league.draftId);
         if (draftData.status !== 'drafting') continue;
 
-        const picks = await sleeperService.getDraftPicks(league.draftId);
+        const [picks, tradedPicks] = await Promise.all([
+          sleeperService.getDraftPicks(league.draftId),
+          sleeperService.getTradedPicks(league.draftId).catch(() => []),
+        ]);
         const myRoster = league.rosters.find(r => r.ownerId === sleeperId);
         const myPickSlot = draftData.draft_order?.[sleeperId];
 
         // Compute next pick for the user
         const picksMade = picks.length;
         const totalRosters = draftData.settings?.teams || 12;
-        let nextPickNumber = null;
+        const rounds = draftData.settings?.rounds || 5;
+        const currentRound = Math.ceil((picksMade + 1) / totalRosters);
+        const currentSlot  = (picksMade % totalRosters) + 1;
 
-        if (myPickSlot) {
-          // Linear draft: next pick = when it cycles back to my slot
-          const currentSlot = (picksMade % totalRosters) + 1;
-          const picksUntilMe = myPickSlot >= currentSlot
-            ? myPickSlot - currentSlot
-            : totalRosters - currentSlot + myPickSlot;
-          nextPickNumber = picksMade + picksUntilMe + 1;
+        // Build roster_id <-> userId maps so we can apply traded picks
+        const rosterIdByOwner = Object.fromEntries((league.rosters || []).map(r => [r.ownerId, r.rosterId]));
+        const ownerByRosterId = Object.fromEntries((league.rosters || []).map(r => [r.rosterId, r.ownerId]));
+        const myRosterId = rosterIdByOwner[sleeperId];
+
+        // For a given draft slot + round, return the userId who currently owns that pick
+        // (accounting for trades). draft_order maps userId -> slot.
+        const slotToOriginalOwner = {};
+        for (const [uid, slot] of Object.entries(draftData.draft_order || {})) {
+          slotToOriginalOwner[slot] = uid;
+        }
+        function effectiveSlotOwner(slot, round) {
+          const originalOwnerId = slotToOriginalOwner[slot];
+          if (!originalOwnerId) return null;
+          const originalRosterId = rosterIdByOwner[originalOwnerId];
+          const trade = tradedPicks.find(tp => tp.round === round && tp.roster_id === originalRosterId);
+          if (trade) return ownerByRosterId[trade.owner_id] ?? originalOwnerId;
+          return originalOwnerId;
+        }
+
+        const onTheClock = effectiveSlotOwner(currentSlot, currentRound) === sleeperId;
+
+        // Find user's next pick across all remaining rounds (handling traded picks)
+        let nextPickNumber = null;
+        for (let round = currentRound; round <= rounds; round++) {
+          // Collect slots the user owns in this round
+          const mySlots = [];
+
+          // Original slot — include unless traded away
+          if (myPickSlot) {
+            const tradedAway = tradedPicks.find(
+              tp => tp.round === round && tp.roster_id === myRosterId && tp.owner_id !== myRosterId
+            );
+            if (!tradedAway) mySlots.push(myPickSlot);
+          }
+
+          // Picks received from others this round
+          for (const tp of tradedPicks) {
+            if (tp.round !== round || tp.owner_id !== myRosterId) continue;
+            const origOwner = ownerByRosterId[tp.roster_id];
+            const origSlot = origOwner ? draftData.draft_order?.[origOwner] : null;
+            if (origSlot) mySlots.push(origSlot);
+          }
+
+          for (const slot of mySlots) {
+            const pickNum = (round - 1) * totalRosters + slot;
+            if (pickNum > picksMade && (nextPickNumber === null || pickNum < nextPickNumber)) {
+              nextPickNumber = pickNum;
+            }
+          }
+          if (nextPickNumber !== null) break;
         }
 
         // Seconds per pick for eta
@@ -302,9 +351,9 @@ router.get('/active', requireAuth, async (req, res) => {
           myNextPick: nextPickNumber,
           etaMs: eta?.getTime() || null,
           totalRosters,
-          rounds: draftData.settings?.rounds || 5,
+          rounds,
           myPickSlot,
-          onTheClock: (picksMade % totalRosters) + 1 === myPickSlot,
+          onTheClock,
         });
       } catch { /* skip unavailable drafts */ }
     }
