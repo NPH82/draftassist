@@ -386,10 +386,31 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       League.findOne({ draftId }).lean(),
     ]);
 
+    // Fetch live rosters from Sleeper so need analysis reflects any mid-draft trades.
+    // Falls back to DB rosters if unavailable.
+    let liveRosters = null;
+    if (league?.sleeperId) {
+      try {
+        liveRosters = await sleeperService.getRosters(league.sleeperId);
+      } catch (e) {
+        console.warn('[Draft] Live roster fetch failed, using DB rosters:', e.message);
+      }
+    }
+    // Merge live roster player lists into the DB league rosters (DB has metadata, live has current players)
+    const effectiveRosters = (league?.rosters || []).map(dbRoster => {
+      const live = liveRosters?.find(lr => String(lr.roster_id) === String(dbRoster.rosterId));
+      if (!live) return dbRoster;
+      return {
+        ...dbRoster,
+        playerIds: live.players || dbRoster.playerIds || [],
+        allPlayerIds: live.players || dbRoster.allPlayerIds || [],
+      };
+    });
+
     const draftedIds = new Set(picks.map(p => p.player_id).filter(Boolean));
     // Also treat every player already on a league roster as unavailable (covers prior devy/rookie drafts and waivers)
     const rosteredIds = new Set(
-      (league?.rosters || []).flatMap(r => [...(r.allPlayerIds || []), ...(r.playerIds || [])])
+      effectiveRosters.flatMap(r => [...(r.allPlayerIds || []), ...(r.playerIds || [])])
     );
     const totalRosters = draftData.settings?.teams || 12;
 
@@ -435,8 +456,8 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       .filter(p => !p.sleeperId || (!draftedIds.has(p.sleeperId) && !rosteredIds.has(p.sleeperId)))
       .map((p, i) => ({ ...p, dasRank: i + 1, valueGap: detectValueGap(p) }));
 
-    // Get my roster from league
-    const myRoster = league?.rosters.find(r => r.ownerId === sleeperId);
+    // Get my roster from live data (reflects mid-draft trades)
+    const myRoster = effectiveRosters.find(r => r.ownerId === sleeperId);
 
     const rosterPoolIds = myRoster?.allPlayerIds || myRoster?.playerIds || [];
 
