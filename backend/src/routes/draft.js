@@ -271,11 +271,12 @@ router.get('/active', requireAuth, async (req, res) => {
         const draftData = await sleeperService.getDraft(league.draftId);
         if (draftData.status !== 'drafting') continue;
 
+        const picks = await sleeperService.getDraftPicks(league.draftId);
         const myRoster = league.rosters.find(r => r.ownerId === sleeperId);
         const myPickSlot = draftData.draft_order?.[sleeperId];
 
         // Compute next pick for the user
-        const picksMade = draftData.picks?.length || 0;
+        const picksMade = picks.length;
         const totalRosters = draftData.settings?.teams || 12;
         let nextPickNumber = null;
 
