@@ -25,6 +25,13 @@ function parseYearsExp(player = {}) {
   return Number.isFinite(value) ? value : null;
 }
 
+function isHeuristicDevyCandidate(sp = {}) {
+  const yearsExp = parseYearsExp(sp);
+  // Sleeper no longer consistently marks devy as years_exp === -1.
+  // Fallback: no NFL team, has college, and not yet accrued NFL experience.
+  return yearsExp !== null && yearsExp <= 0 && !sp.team && !!sp.college;
+}
+
 // ---------------------------------------------------------------------------
 // importSleeperPlayers
 // ---------------------------------------------------------------------------
@@ -141,10 +148,18 @@ async function importDevyPlayers() {
   const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
   let created = 0, updated = 0, skipped = 0;
 
-  for (const [id, sp] of Object.entries(sleeperMap)) {
-    // Devy player: years_exp === -1 means they have never been in the NFL
+  const allEntries = Object.entries(sleeperMap);
+  const strictCount = allEntries.reduce((acc, [, sp]) => {
+    return parseYearsExp(sp) === -1 ? acc + 1 : acc;
+  }, 0);
+  const useFallbackHeuristic = strictCount === 0;
+
+  for (const [id, sp] of allEntries) {
+    // Primary rule: years_exp === -1.
+    // Fallback rule: when Sleeper no longer provides -1 records, use no-team + college + years_exp <= 0.
     const yearsExp = parseYearsExp(sp);
-    if (yearsExp !== -1) { skipped++; continue; }
+    const isDevy = yearsExp === -1 || (useFallbackHeuristic && isHeuristicDevyCandidate(sp));
+    if (!isDevy) { skipped++; continue; }
 
     const pos = sp.position;
     if (!pos || !SKILL_POSITIONS.has(pos)) { skipped++; continue; }

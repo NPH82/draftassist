@@ -38,6 +38,13 @@ function parseYearsExp(player = {}) {
   return Number.isFinite(value) ? value : null;
 }
 
+function isSleeperDevyPlayer(sp = {}) {
+  const yearsExp = parseYearsExp(sp);
+  if (yearsExp === -1) return true;
+  // Sleeper fallback: treat no-team college players with <=0 experience as devy-like.
+  return yearsExp !== null && yearsExp <= 0 && !sp.team && !!sp.college;
+}
+
 function getPlayerAliasFromMetadata(metadata = {}, playerId) {
   if (!metadata || !playerId) return null;
 
@@ -731,7 +738,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const alias = owner.devyAlias ? String(owner.devyAlias).trim() : null;
       const hasDistinctAlias = !!(alias && (!officialName || alias.toLowerCase() !== officialName.toLowerCase()));
 
-      if (yearsExp === -1 || hasDistinctAlias) {
+      if (isSleeperDevyPlayer(sp) || hasDistinctAlias) {
         devyRosteredIds.add(id);
       } else if (yearsExp === 0 && sp && sp.team) {
         // years_exp: 0 + has a team = just drafted into NFL this year
@@ -805,7 +812,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         const sp = sleeperPlayerMap[p.sleeperId] || {};
         // Skip players who have now graduated to the NFL (years_exp !== -1)
         const yearsExp = parseYearsExp(sp);
-        if (yearsExp !== null && yearsExp !== -1) return null;
+        if (yearsExp !== null && !isSleeperDevyPlayer(sp)) return null;
         return {
           sleeperId: p.sleeperId,
           name: p.name,
@@ -848,7 +855,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         const sp = p.sleeperId ? sleeperPlayerMap[p.sleeperId] : null;
         const yearsExp = parseYearsExp(sp || {});
         // Exclude players that are still devy in Sleeper data.
-        if (yearsExp === -1) return false;
+        if (isSleeperDevyPlayer(sp || {})) return false;
         // Rookie pool should focus on current incoming/first-year NFL players.
         if (yearsExp !== null && yearsExp > 0) return false;
 
