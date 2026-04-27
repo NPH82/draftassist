@@ -71,7 +71,19 @@ router.get('/', requireAuth, async (req, res) => {
         return { leagueId: league.sleeperId, leagueName: league.name, trades: [] };
       }
 
-      const myPlayers = (myRoster.allPlayerIds || myRoster.playerIds || [])
+      // Build an exact id→ownerId map for this league so each player ID maps to one owner only.
+      // This prevents players appearing under the wrong manager when sleeperId field lookups overlap.
+      const idToOwner = new Map();
+      for (const roster of (league.rosters || [])) {
+        const ids = [...(roster.allPlayerIds || []), ...(roster.playerIds || [])];
+        for (const id of ids) {
+          if (!idToOwner.has(id)) idToOwner.set(id, roster.ownerId);
+        }
+      }
+
+      const myIds = new Set([...(myRoster.allPlayerIds || []), ...(myRoster.playerIds || [])]);
+      const myPlayers = [...myIds]
+        .filter(id => idToOwner.get(id) === sleeperId)
         .map(id => playerMap[id])
         .filter(Boolean);
       const rankedNeeds = rankNeeds(myPlayers);
@@ -90,7 +102,10 @@ router.get('/', requireAuth, async (req, res) => {
         for (const partner of partnerRosters) {
           if (trades.length >= 6) break;
 
-          const partnerPlayers = (partner.allPlayerIds || partner.playerIds || [])
+          // Only include IDs that the idToOwner map confirms belong to this partner.
+          const partnerIds = [...new Set([...(partner.allPlayerIds || []), ...(partner.playerIds || [])])]
+            .filter(id => idToOwner.get(id) === partner.ownerId);
+          const partnerPlayers = partnerIds
             .map(id => playerMap[id])
             .filter(Boolean);
 

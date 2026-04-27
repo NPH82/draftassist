@@ -92,6 +92,16 @@ async function suggestTradeUp({ targetPlayer, ourPickNumber, targetPicksAt, allR
 async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPick, allRosters, userId, playerMap = {}, ourPositionalNeed = 'WR', teams = 12 }) {
   const suggestions = [];
 
+  // Build a single id→ownerId map for this roster set so each player ID is
+  // pinned to exactly one manager — prevents cross-roster attribution on stale sync data.
+  const idToOwner = new Map();
+  for (const roster of allRosters) {
+    const ids = [...(roster.allPlayerIds || []), ...(roster.playerIds || [])];
+    for (const id of ids) {
+      if (!idToOwner.has(id)) idToOwner.set(id, roster.ownerId);
+    }
+  }
+
   for (const roster of allRosters) {
     if (roster.ownerId === userId) continue;
     const theirNextPick = roster.nextPickNumber;
@@ -100,7 +110,8 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
     const picksBack = theirNextPick - ourPickNumber;
     const targetMarketPick = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || availableUntilPick;
 
-    const theirTradablePlayers = (roster.playerIds || roster.allPlayerIds || [])
+    const theirTradablePlayers = [...new Set([...(roster.allPlayerIds || []), ...(roster.playerIds || [])])]
+      .filter(id => idToOwner.get(id) === roster.ownerId)
       .map(id => playerMap[id])
       .filter(p => p && p.name && ((p.ktcValue || 0) > 0 || (p.fantasyProsValue || 0) > 0));
 
@@ -148,7 +159,8 @@ async function suggestTradeDown({ targetPlayer, ourPickNumber, availableUntilPic
       const picksBack = theirNextPick - ourPickNumber;
       const targetMarketPick = targetPlayer.underdogAdp || targetPlayer.fantasyProsRank || availableUntilPick;
 
-      const theirTradablePlayers = (roster.playerIds || roster.allPlayerIds || [])
+      const theirTradablePlayers = [...new Set([...(roster.allPlayerIds || []), ...(roster.playerIds || [])])]
+        .filter(id => idToOwner.get(id) === roster.ownerId)
         .map(id => playerMap[id])
         .filter(p => p && p.name && ((p.ktcValue || 0) > 0 || (p.fantasyProsValue || 0) > 0));
 
@@ -495,7 +507,8 @@ function formatPick(overall, teams = 12) {
 
 function estimatePositionalNeed(roster, playerMap) {
   const counts = { QB: 0, RB: 0, WR: 0, TE: 0 };
-  for (const id of (roster.playerIds || [])) {
+  const allIds = [...new Set([...(roster.allPlayerIds || []), ...(roster.playerIds || [])])];
+  for (const id of allIds) {
     const p = playerMap[id];
     if (p && counts[p.position] !== undefined) counts[p.position]++;
   }
