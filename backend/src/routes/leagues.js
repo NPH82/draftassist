@@ -404,6 +404,10 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
 
     // Players already drafted in this draft
     const draftedIds = new Set(picks.map(p => p.player_id).filter(Boolean));
+    // Players already on any roster in this league (covers carried devy/rookie players)
+    const rosteredIds = new Set(
+      (league.rosters || []).flatMap(r => [...(r.allPlayerIds || []), ...(r.playerIds || [])])
+    );
     const picksMade = picks.length;
 
     // All players sorted by DAS score — rookie/devy drafts should only show a single class year.
@@ -483,7 +487,7 @@ router.get('/:leagueId/draft-targets', requireAuth, async (req, res) => {
       // Players available at this pick: not yet drafted + ADP rank >= pickNumber
       // (i.e., we expect players ranked higher by ADP to be gone)
       const available = allPlayers.filter(p => {
-        if (p.sleeperId && draftedIds.has(p.sleeperId)) return false;
+          if (p.sleeperId && (draftedIds.has(p.sleeperId) || rosteredIds.has(p.sleeperId))) return false;
         const adpRank = adpRankMap.get(String(p._id)) || 9999;
         return adpRank >= pickNumber;
       });
