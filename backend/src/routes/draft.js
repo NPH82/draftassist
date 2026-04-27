@@ -337,6 +337,10 @@ router.get('/:draftId', requireAuth, async (req, res) => {
     ]);
 
     const draftedIds = new Set(picks.map(p => p.player_id).filter(Boolean));
+    // Also treat every player already on a league roster as unavailable (covers prior devy/rookie drafts and waivers)
+    const rosteredIds = new Set(
+      (league?.rosters || []).flatMap(r => [...(r.allPlayerIds || []), ...(r.playerIds || [])])
+    );
     const totalRosters = draftData.settings?.teams || 12;
 
     // No recommendations for 32-team leagues — return board-only state
@@ -378,7 +382,7 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       .lean();
     const teamContext = buildTeamContext(teamContextPlayers);
     const availablePlayers = allPlayers
-      .filter(p => !p.sleeperId || !draftedIds.has(p.sleeperId))
+      .filter(p => !p.sleeperId || (!draftedIds.has(p.sleeperId) && !rosteredIds.has(p.sleeperId)))
       .map((p, i) => ({ ...p, dasRank: i + 1, valueGap: detectValueGap(p) }));
 
     // Get my roster from league
