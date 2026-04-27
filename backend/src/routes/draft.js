@@ -10,7 +10,7 @@ const sleeperService = require('../services/sleeperService');
 const { requireAuth } = require('../middleware/auth');
 const { detectValueGap, calcPersonalRankScore } = require('../services/scoringEngine');
 const { predictAvailability, detectFallers } = require('../services/availabilityPredictor');
-const { suggestTradeUp, suggestTradeDown } = require('../services/tradeEngine');
+const { suggestTradeUp, suggestTradeDown, fpPickValue } = require('../services/tradeEngine');
 const { enrichProfilesWithDraftClass } = require('../services/learningEngine');
 const { analyzePositionalNeeds, buildRosterComposition, scoreDraftFit } = require('../services/winWindowService');
 const Player = require('../models/Player');
@@ -530,44 +530,56 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       );
 
       // Find managers with picks in the gap — they're your trade-back partners.
+      // Use myNextPickNumber as the base so we only include picks AFTER the user's own slot.
       const partners = findTradeBackPartners({
         rosters: league?.rosters.filter(r => r.ownerId !== sleeperId) || [],
         draftOrder: draftData.draft_order || {},
-        currentPick: currentOverallPick,
+        currentPick: myNextPickNumber,
         safeUntilPick: safeUntil,
         totalRosters,
       });
 
       const betterNowOptions = top5
         .filter(p => !p.tradeBackCandidate)
-        .map(p => p.name)
         .slice(0, 2);
+
+      // Compute expected return FP value when trading back to first partner
+      const myPickFp = fpPickValue(myNextPickNumber);
+      const firstPartnerFp = partners.length > 0 ? fpPickValue(partners[0].nextPick) : 0;
+      const surplusFp = Math.max(0, myPickFp - firstPartnerFp);
+      const returnFp = Math.round(surplusFp * 0.88 * 10) / 10;
 
       let message;
       if (partners.length > 0) {
         const partnerNames = partners.slice(0, 2).map(p =>
           `${p.username} (pick ${p.nextPick}, ${p.picksBackFromUs} back)`
         ).join(' or ');
-        message = `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || currentOverallPick)} — market says they'll fall. ` +
-          `Trade back with ${partnerNames}: give them your pick ${currentOverallPick}, drop ${partners[0].picksBackFromUs} spots, ` +
-          `still land ${tradeBackRec.name} + gain draft capital.` +
-          (betterNowOptions.length ? ` Or take better value now: ${betterNowOptions.join(', ')}.` : '');
+        const returnNote = returnFp > 0
+          ? ` Expect ~${returnFp} FP in return assets — see packages below.`
+          : '';
+        message = `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || myNextPickNumber)} — market says they'll fall. ` +
+          `Trade back with ${partnerNames}: give them your pick ${myNextPickNumber}, drop ${partners[0].picksBackFromUs} spot${partners[0].picksBackFromUs !== 1 ? 's' : ''}, ` +
+          `still land ${tradeBackRec.name} + gain draft capital.${returnNote}` +
+          (betterNowOptions.length ? ` Or take better value now: ${betterNowOptions.map(p => p.name).join(', ')}.` : '');
       } else {
-        message = `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || currentOverallPick)} — no easy trade-back window found. ` +
+        message = `${tradeBackRec.name} projects around pick ${Math.round(tradeBackRec.marketRank || myNextPickNumber)} — no easy trade-back window found. ` +
           `Taking better value now is recommended` +
-          (betterNowOptions.length ? `: ${betterNowOptions.join(', ')}.` : '.');
+          (betterNowOptions.length ? `: ${betterNowOptions.map(p => p.name).join(', ')}.` : '.');
       }
 
       strategyHint = {
         type: 'trade_back_or_pivot',
         message,
         playerId: tradeBackRec.sleeperId || tradeBackRec._id,
-        marketRank: Math.round(tradeBackRec.marketRank || currentOverallPick),
-        currentPick: currentOverallPick,
+        marketRank: Math.round(tradeBackRec.marketRank || myNextPickNumber),
+        currentPick: myNextPickNumber,
         reachGap: Math.round(tradeBackRec.marketReachGap || 0),
         availabilityProb: tradeBackRec.availabilityProb,
         tradeBackPartners: partners,
-        betterValueNow: betterNowOptions,
+        betterValueNow: betterNowOptions.map(p => ({
+          name: p.name,
+          id: p.sleeperId || String(p._id),
+        })),
       };
     }
 

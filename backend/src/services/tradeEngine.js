@@ -499,4 +499,4 @@ function generateTradeHubSuggestions(userRosters, allLeagueRosters, playerMap) {
   return suggestions;
 }
 
-module.exports = { suggestTradeUp, suggestTradeDown, assessTradeFairness, generateTradeHubSuggestions, estimatePickValue };
+module.exports = { suggestTradeUp, suggestTradeDown, assessTradeFairness, generateTradeHubSuggestions, estimatePickValue, fpPickValue };

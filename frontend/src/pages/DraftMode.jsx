@@ -29,6 +29,8 @@ function DraftModeInner({ draftId }) {
   const [showTargets, setShowTargets] = useState(false);
   const [hintTrades, setHintTrades] = useState(null);
   const [loadingHintTrades, setLoadingHintTrades] = useState(false);
+  const [betterNowTrades, setBetterNowTrades] = useState({});   // keyed by playerId
+  const [loadingBetterNow, setLoadingBetterNow] = useState({});
 
   const ds = draftState;
   const leagueId = ds?.leagueId || null;
@@ -45,6 +47,24 @@ function DraftModeInner({ draftId }) {
       setLoadingHintTrades(false);
     }
   }, [draftId, ds?.strategyHint?.playerId]);
+
+  const handleLoadBetterNowTrades = useCallback(async (playerId) => {
+    if (!draftId || !playerId) return;
+    if (betterNowTrades[playerId]) {
+      // toggle off
+      setBetterNowTrades(prev => { const next = { ...prev }; delete next[playerId]; return next; });
+      return;
+    }
+    setLoadingBetterNow(prev => ({ ...prev, [playerId]: true }));
+    try {
+      const data = await getDraftTrades(draftId, playerId);
+      setBetterNowTrades(prev => ({ ...prev, [playerId]: data }));
+    } catch {
+      setBetterNowTrades(prev => ({ ...prev, [playerId]: { tradeUp: [], tradeDown: [] } }));
+    } finally {
+      setLoadingBetterNow(prev => { const next = { ...prev }; delete next[playerId]; return next; });
+    }
+  }, [draftId, betterNowTrades]);
 
   if (loading) {
     return (
@@ -152,7 +172,9 @@ function DraftModeInner({ draftId }) {
             <div style={{ marginBottom: '0.35rem' }}>
               {ds.strategyHint.tradeBackPartners.slice(0, 3).map((p, i) => (
                 <div key={i} className="text-xs text-muted">
-                  → {p.username}: pick {p.nextPick} ({p.picksBackFromUs} back)
+                  → {p.username}: pick {p.nextPick} ({p.picksBackFromUs > 0
+                    ? `${p.picksBackFromUs} back`
+                    : `${Math.abs(p.picksBackFromUs)} forward`})
                 </div>
               ))}
             </div>
@@ -197,6 +219,39 @@ function DraftModeInner({ draftId }) {
               {!hintTrades.tradeUp?.length && !hintTrades.tradeDown?.length && (
                 <div className="text-xs text-muted">No specific trade partners found in the draft order window.</div>
               )}
+            </div>
+          )}
+
+          {/* Secure a "better value now" player by trading up */}
+          {ds.strategyHint.betterValueNow?.length > 0 && (
+            <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '0.45rem' }}>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Want to secure one of the better-value options instead?</div>
+              {ds.strategyHint.betterValueNow.map((player) => (
+                <div key={player.id} style={{ marginBottom: '0.35rem' }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem' }}
+                    onClick={() => handleLoadBetterNowTrades(player.id)}
+                    disabled={!!loadingBetterNow[player.id]}
+                  >
+                    {loadingBetterNow[player.id]
+                      ? 'Loading…'
+                      : betterNowTrades[player.id]
+                        ? `▲ Hide — ${player.name}`
+                        : `↑ Secure ${player.name}`}
+                  </button>
+                  {betterNowTrades[player.id]?.tradeUp?.length > 0 && (
+                    <div style={{ marginTop: '0.3rem' }}>
+                      {betterNowTrades[player.id].tradeUp.slice(0, 2).map((t, i) => (
+                        <HintTradeCard key={i} suggestion={t} direction="up" />
+                      ))}
+                    </div>
+                  )}
+                  {betterNowTrades[player.id] && !betterNowTrades[player.id].tradeUp?.length && (
+                    <div className="text-xs text-muted" style={{ marginTop: '0.2rem' }}>No trade-up options found for {player.name}.</div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
