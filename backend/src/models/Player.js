@@ -66,6 +66,12 @@ const playerSchema = new mongoose.Schema({
     positionSpecific: Number,
   },
 
+  // Devy (college prospect) flags — set for players not yet in the NFL
+  isDevy: { type: Boolean, default: false },
+  devyClass: Number,          // expected NFL draft year (e.g. 2027, 2028)
+  devyKtcValue: Number,       // KTC's separate devy dynasty value scale
+  devyFpRank: Number,         // FantasyPros devy-specific rank
+
   // Metadata
   dataSource: { type: String, default: 'seed' },
   lastUpdated: { type: Date, default: Date.now },

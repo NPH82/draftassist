@@ -20,6 +20,19 @@ const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 
+const KTC_TO_FP = 68 / 9500;
+
+function fpEquivalentValue(player = {}, isDevy = false) {
+  const fp = Number(player.fantasyProsValue || 0);
+  const ktcRaw = isDevy ? Number(player.devyKtcValue || player.ktcValue || 0) : Number(player.ktcValue || 0);
+  const ktcFp = ktcRaw > 0 ? ktcRaw * KTC_TO_FP : 0;
+
+  if (fp > 0 && ktcFp > 0) return Math.round(((fp * 0.55) + (ktcFp * 0.45)) * 10) / 10;
+  if (fp > 0) return Math.round(fp * 10) / 10;
+  if (ktcFp > 0) return Math.round(ktcFp * 10) / 10;
+  return 0;
+}
+
 function toInt(value) {
   const n = parseInt(value, 10);
   return Number.isFinite(n) ? n : null;
@@ -617,6 +630,242 @@ router.post('/:leagueId/draft-feedback', requireAuth, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[Draft Feedback]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/leagues/:leagueId/devy-pool
+// Returns the available devy prospect pool and per-manager rostered devy players.
+// Only meaningful for devy leagues (name contains "devy" or has devy roster slots).
+router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const league = await League.findOne({ sleeperId: leagueId }).lean();
+    if (!league) return res.status(404).json({ error: 'League not found' });
+
+    // Fetch Sleeper player map so we can identify devy players by years_exp
+    let sleeperPlayerMap = {};
+    try {
+      sleeperPlayerMap = await sleeperService.getAllPlayers('nfl');
+    } catch (e) {
+      console.warn('[DevyPool] Sleeper player map unavailable:', e.message);
+    }
+
+    // Collect every player ID across all rosters (active + taxi)
+    const allRosterIds = new Set();
+    const idToRoster = {};  // sleeperId -> { ownerId, username, onTaxi }
+    for (const roster of league.rosters || []) {
+      const active = roster.playerIds || [];
+      const taxi = roster.taxiPlayerIds || [];
+      for (const id of active) {
+        allRosterIds.add(id);
+        if (!idToRoster[id]) idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: false };
+      }
+      for (const id of taxi) {
+        allRosterIds.add(id);
+        if (!idToRoster[id]) idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: true };
+      }
+    }
+
+    // Identify which roster IDs are devy players (years_exp === -1 in Sleeper)
+    // Also track players who were devy but just got drafted to an NFL team ("graduated")
+    const devyRosteredIds = new Set();
+    const graduatedIds = new Set();  // had/have NFL team — recently drafted from devy pool
+
+    for (const id of allRosterIds) {
+      const sp = sleeperPlayerMap[id];
+      if (!sp) continue;
+      if (sp.years_exp === -1) {
+        devyRosteredIds.add(id);
+      } else if (sp.years_exp === 0 && sp.team) {
+        // years_exp: 0 + has a team = just drafted into NFL this year
+        graduatedIds.add(id);
+      }
+    }
+
+    // Load devy players from our DB
+    const devyDbPlayers = await Player.find({ isDevy: true })
+      .select('sleeperId name position college devyClass devyKtcValue ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age')
+      .lean();
+
+    const devyBySleeperID = Object.fromEntries(devyDbPlayers.map(p => [p.sleeperId, p]));
+
+    // Build rostered devy list: DB record + owner info + Sleeper data
+    const rosterList = [];
+    for (const id of devyRosteredIds) {
+      const sp = sleeperPlayerMap[id] || {};
+      const db = devyBySleeperID[id];
+      const owner = idToRoster[id];
+
+      const name = db?.name || sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
+      const position = db?.position || sp.position || '?';
+      const college = db?.college || sp.college || null;
+
+      rosterList.push({
+        sleeperId: id,
+        name,
+        position,
+        college,
+        devyClass: db?.devyClass || null,
+        devyKtcValue: db?.devyKtcValue || 0,
+        ktcValue: db?.ktcValue || 0,
+        fantasyProsValue: db?.fantasyProsValue || 0,
+        fantasyProsRank: db?.fantasyProsRank || null,
+        dasScore: db?.dasScore || null,
+        ownerId: owner.ownerId,
+        ownerUsername: owner.username,
+        onTaxi: owner.onTaxi,
+        inOurDb: !!db,
+      });
+    }
+
+    // Build graduated list — devy players who are now on NFL rosters
+    const graduatedList = [];
+    for (const id of graduatedIds) {
+      const sp = sleeperPlayerMap[id] || {};
+      const name = sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
+      const owner = idToRoster[id];
+      graduatedList.push({
+        sleeperId: id,
+        name,
+        position: sp.position || '?',
+        team: sp.team || null,  // now has an NFL team
+        college: sp.college || null,
+        ownerId: owner?.ownerId,
+        ownerUsername: owner?.username,
+        onTaxi: owner?.onTaxi,
+      });
+    }
+
+    // Build available pool: all devy players in our DB NOT on any roster in this league
+    const availablePool = devyDbPlayers
+      .filter(p => p.sleeperId && !devyRosteredIds.has(p.sleeperId))
+      .map(p => {
+        const sp = sleeperPlayerMap[p.sleeperId] || {};
+        // Skip players who have now graduated to the NFL (years_exp !== -1)
+        if (sp.sleeperId && sp.years_exp !== undefined && sp.years_exp !== -1) return null;
+        return {
+          sleeperId: p.sleeperId,
+          name: p.name,
+          position: p.position,
+          college: p.college || sp.college || null,
+          devyClass: p.devyClass || null,
+          devyKtcValue: p.devyKtcValue || 0,
+          ktcValue: p.ktcValue || 0,
+          fantasyProsValue: p.fantasyProsValue || 0,
+          fantasyProsRank: p.fantasyProsRank || null,
+          dasScore: p.dasScore || null,
+          fpEquivalent: fpEquivalentValue(p, true),
+        };
+      })
+      .filter(Boolean)
+      // Sort: devyKtcValue desc, then ktcValue, then fantasyProsValue
+      .sort((a, b) => {
+        const aVal = a.devyKtcValue || a.ktcValue || 0;
+        const bVal = b.devyKtcValue || b.ktcValue || 0;
+        return bVal - aVal;
+      });
+
+    // Build current rookie availability pool in this league (non-devy rookies not rostered).
+    const currentYear = new Date().getFullYear();
+    const rookieDbPlayers = await Player.find({
+      isDevy: { $ne: true },
+      $or: [
+        { isRookie: true },
+        { nflDraftYear: currentYear },
+      ],
+    })
+      .select('sleeperId name position team college nflDraftYear fantasyProsValue fantasyProsRank ktcValue ktcRank underdogAdp dasScore isRookie')
+      .lean();
+
+    const availableRookies = rookieDbPlayers
+      .filter((p) => {
+        // If tied to a Sleeper ID and already rostered/taxi, it's not available in this league.
+        if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
+
+        const sp = p.sleeperId ? sleeperPlayerMap[p.sleeperId] : null;
+        // Exclude players that are still devy in Sleeper data.
+        if (sp && sp.years_exp === -1) return false;
+        // Rookie pool should focus on current incoming/first-year NFL players.
+        if (sp && sp.years_exp !== undefined && sp.years_exp > 0) return false;
+
+        return true;
+      })
+      .map((p) => ({
+        sleeperId: p.sleeperId || null,
+        name: p.name,
+        position: p.position,
+        team: p.team || null,
+        college: p.college || null,
+        nflDraftYear: p.nflDraftYear || null,
+        fantasyProsValue: p.fantasyProsValue || 0,
+        fantasyProsRank: p.fantasyProsRank || null,
+        ktcValue: p.ktcValue || 0,
+        ktcRank: p.ktcRank || null,
+        underdogAdp: p.underdogAdp || null,
+        dasScore: p.dasScore || null,
+        fpEquivalent: fpEquivalentValue(p, false),
+      }))
+      .sort((a, b) => {
+        if (b.fpEquivalent !== a.fpEquivalent) return b.fpEquivalent - a.fpEquivalent;
+        const aVal = a.ktcValue || 0;
+        const bVal = b.ktcValue || 0;
+        return bVal - aVal;
+      });
+
+    const comparisonRows = availablePool.slice(0, 15).map((devy, idx) => {
+      const rookie = availableRookies[idx] || null;
+      return {
+        devy,
+        rookie,
+        fpGap: rookie ? Math.round((devy.fpEquivalent - rookie.fpEquivalent) * 10) / 10 : null,
+      };
+    });
+
+    // Augment: for any rostered devy IDs not yet in our DB, pull from Sleeper map only
+    const unknownIds = [...devyRosteredIds].filter(id => !devyBySleeperID[id]);
+    const unknownPlayers = unknownIds.map(id => {
+      const sp = sleeperPlayerMap[id] || {};
+      const owner = idToRoster[id];
+      const name = sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
+      return {
+        sleeperId: id,
+        name,
+        position: sp.position || '?',
+        college: sp.college || null,
+        devyClass: null,
+        devyKtcValue: 0,
+        ktcValue: 0,
+        fantasyProsValue: 0,
+        fantasyProsRank: null,
+        dasScore: null,
+        ownerId: owner.ownerId,
+        ownerUsername: owner.username,
+        onTaxi: owner.onTaxi,
+        inOurDb: false,
+      };
+    });
+
+    res.json({
+      leagueId,
+      leagueName: league.name,
+      isDevyLeague: /devy/i.test(league.name || ''),
+      rostered: rosterList,
+      unknown: unknownPlayers,   // devy players Sleeper knows about but we haven't imported yet
+      graduated: graduatedList,  // recently NFL-drafted — were in devy pool
+      available: availablePool,
+      availableRookies,
+      comparisonRows,
+      counts: {
+        rostered: rosterList.length,
+        unknown: unknownPlayers.length,
+        graduated: graduatedList.length,
+        available: availablePool.length,
+        availableRookies: availableRookies.length,
+      },
+    });
+  } catch (err) {
+    console.error('[DevyPool]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

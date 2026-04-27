@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { getActiveDrafts, getDataStatus, refreshRankings, triggerLearn, seedRookies, syncSleeperIds, importSleeperPlayers } from '../services/api';
+import { getActiveDrafts, getDataStatus, refreshRankings, triggerLearn, seedRookies, syncSleeperIds, importSleeperPlayers, importDevyPlayers, refreshDevyRankings } from '../services/api';
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import FreshnessTag from '../components/DataFreshness/FreshnessTag';
 import DraftTargets from '../components/DraftTargets/DraftTargets';
 import ScoutingHub from '../components/ScoutingHub/ScoutingHub';
+import DevyPool from '../components/DevyPool/DevyPool';
 import { formatEta, timeAgo } from '../utils/formatting';
 
 export default function Dashboard() {
@@ -26,6 +27,10 @@ export default function Dashboard() {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState(null);
   const [expandedLeague, setExpandedLeague] = useState(null);
+  const [devyImporting, setDevyImporting] = useState(false);
+  const [devyImportMsg, setDevyImportMsg] = useState(null);
+  const [refreshingDevy, setRefreshingDevy] = useState(false);
+  const [devyRefreshMsg, setDevyRefreshMsg] = useState(null);
 
   useEffect(() => {
     getActiveDrafts()
@@ -98,6 +103,32 @@ export default function Dashboard() {
       setLearnMsg('Scout failed -- check Render logs');
     } finally {
       setLearning(false);
+    }
+  };
+
+  const handleImportDevyPlayers = async () => {
+    setDevyImporting(true);
+    setDevyImportMsg(null);
+    try {
+      const res = await importDevyPlayers();
+      setDevyImportMsg(res.message);
+    } catch (err) {
+      setDevyImportMsg(err?.response?.data?.error || 'Devy import failed');
+    } finally {
+      setDevyImporting(false);
+    }
+  };
+
+  const handleRefreshDevyRankings = async () => {
+    setRefreshingDevy(true);
+    setDevyRefreshMsg(null);
+    try {
+      const res = await refreshDevyRankings();
+      setDevyRefreshMsg(res.message);
+    } catch (err) {
+      setDevyRefreshMsg(err?.response?.data?.error || 'Devy refresh failed');
+    } finally {
+      setRefreshingDevy(false);
     }
   };
 
@@ -213,6 +244,21 @@ export default function Dashboard() {
                         <DraftTargets leagueId={lg.leagueId} draftId={lg.draftId} />
                       </div>
                     )}
+
+                    {/* Devy pool panel — only for leagues with "devy" in the name */}
+                    {isExpanded && /devy/i.test(lg.name || '') && (
+                      <div
+                        style={{
+                          marginTop: '0.5rem',
+                          padding: '0.85rem',
+                          background: 'var(--bg-card, #1a1a2e)',
+                          borderRadius: 10,
+                          border: '1px solid var(--border, #2a2a3e)',
+                        }}
+                      >
+                        <DevyPool leagueId={lg.leagueId} />
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -306,6 +352,38 @@ export default function Dashboard() {
             </button>
             <div className="text-xs text-muted">
               Upserts all QB/RB/WR/TE players from Sleeper into the database so veteran rosters evaluate correctly. Safe to re-run.
+            </div>
+
+            {devyImportMsg && (
+              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
+                {devyImportMsg}
+              </div>
+            )}
+            <button
+              className="btn btn-secondary text-sm"
+              onClick={handleImportDevyPlayers}
+              disabled={devyImporting}
+            >
+              {devyImporting ? 'Importing devy players...' : 'Import Devy Players'}
+            </button>
+            <div className="text-xs text-muted">
+              Seeds college prospects (Sleeper <code>years_exp: -1</code>) into the database. Run once, then re-run after each NFL draft to add newly eligible prospects.
+            </div>
+
+            {devyRefreshMsg && (
+              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
+                {devyRefreshMsg}
+              </div>
+            )}
+            <button
+              className="btn btn-secondary text-sm"
+              onClick={handleRefreshDevyRankings}
+              disabled={refreshingDevy}
+            >
+              {refreshingDevy ? 'Refreshing devy rankings...' : 'Refresh Devy Rankings (KTC)'}
+            </button>
+            <div className="text-xs text-muted">
+              Fetches KTC devy values and updates all college prospects in the database.
             </div>
           </div>
         </section>

@@ -5,12 +5,12 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
-const { refreshDailyRankings, refreshDepthCharts, loadPlayerData } = require('../scrapers/index');
+const { refreshDailyRankings, refreshDepthCharts, loadPlayerData, refreshDevyRankings } = require('../scrapers/index');
 const { learnFromUserLeagues, enrichProfilesWithDraftClass } = require('../services/learningEngine');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const sleeperService = require('../services/sleeperService');
-const { importSleeperPlayers, syncSleeperIds: runSyncSleeperIds } = require('../services/sleeperSync');
+const { importSleeperPlayers, syncSleeperIds: runSyncSleeperIds, importDevyPlayers } = require('../services/sleeperSync');
 
 // POST /api/admin/refresh/rankings -- trigger daily rankings scrape now
 router.post('/refresh/rankings', requireAuth, async (req, res) => {
@@ -327,6 +327,35 @@ router.post('/import-sleeper-players', requireAuth, async (req, res) => {
       message: `Import complete: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped (non-skill pos)`,
       ...result,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/import-devy-players
+// Seeds college/devy prospects from Sleeper's /players/nfl (years_exp === -1) into our DB.
+// Run once to seed, then re-run after each NFL draft to remove graduated prospects.
+router.post('/import-devy-players', requireAuth, async (req, res) => {
+  try {
+    const result = await importDevyPlayers();
+    res.json({
+      message: `Devy import complete: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped`,
+      ...result,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/refresh/devy-rankings
+// Fetches KTC devy values and updates devyKtcValue on all isDevy players in DB.
+router.post('/refresh/devy-rankings', requireAuth, async (req, res) => {
+  try {
+    console.log('[Admin] Devy rankings refresh triggered');
+    refreshDevyRankings()
+      .then(r => console.log('[Admin] Devy rankings refresh complete', r))
+      .catch(err => console.error('[Admin] Devy rankings refresh error', err));
+    res.json({ ok: true, message: 'Devy rankings refresh started -- KTC devy values will update within ~60 seconds' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

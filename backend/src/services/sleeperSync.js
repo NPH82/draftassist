@@ -117,4 +117,67 @@ async function syncSleeperIds() {
   return summary;
 }
 
-module.exports = { importSleeperPlayers, syncSleeperIds };
+module.exports = { importSleeperPlayers, syncSleeperIds, importDevyPlayers };
+
+// ---------------------------------------------------------------------------
+// importDevyPlayers
+// ---------------------------------------------------------------------------
+/**
+ * Imports college/devy players from Sleeper's player list into our DB.
+ * Devy players are identified by years_exp === -1 (never played in NFL).
+ * Existing records are updated with isDevy=true; new records are created.
+ *
+ * Run this once to seed the devy pool, then re-run after each NFL draft to
+ * pick up any newly enrolled college prospects Sleeper has added.
+ */
+async function importDevyPlayers() {
+  const sleeperMap = await getAllPlayers('nfl');
+
+  const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
+  let created = 0, updated = 0, skipped = 0;
+
+  for (const [id, sp] of Object.entries(sleeperMap)) {
+    // Devy player: years_exp === -1 means they have never been in the NFL
+    if (sp.years_exp !== -1) { skipped++; continue; }
+
+    const pos = sp.position;
+    if (!pos || !SKILL_POSITIONS.has(pos)) { skipped++; continue; }
+
+    const fullName = (sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`).trim();
+    if (!fullName) { skipped++; continue; }
+
+    const existing = await Player.findOne({ sleeperId: id }).lean();
+    if (existing) {
+      await Player.updateOne(
+        { sleeperId: id },
+        {
+          $set: {
+            isDevy: true,
+            team: null,  // devy players have no NFL team
+            college: sp.college || existing.college || null,
+            currentInjuryStatus: sp.injury_status || 'Active',
+          },
+        }
+      );
+      updated++;
+    } else {
+      await Player.create({
+        sleeperId: id,
+        name: fullName,
+        position: pos,
+        team: null,
+        age: sp.age || null,
+        college: sp.college || null,
+        isDevy: true,
+        isRookie: false,  // not a current-year rookie — still in college
+        ktcValue: 0,
+        fantasyProsValue: 0,
+        devyKtcValue: 0,
+      });
+      created++;
+    }
+  }
+
+  console.log(`[SleeperSync] importDevyPlayers: ${created} created, ${updated} updated, ${skipped} skipped`);
+  return { created, updated, skipped };
+}

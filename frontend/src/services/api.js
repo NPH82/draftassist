@@ -22,6 +22,7 @@ export const getLeagues = (year = '2026') => api.get('/leagues', { params: { yea
 export const getLeague = (id) => api.get(`/leagues/${id}`).then(r => r.data);
 export const getLeagueAlerts = (id, days = 30) => api.get(`/leagues/${id}/alerts`, { params: { days } }).then(r => r.data);
 export const getLeagueDraftTargets = (id) => api.get(`/leagues/${id}/draft-targets`).then(r => r.data);
+export const getDevyPool = (id) => api.get(`/leagues/${id}/devy-pool`).then(r => r.data);
 export const submitDraftFeedback = (id, data) => api.post(`/leagues/${id}/draft-feedback`, data).then(r => r.data);
 
 // Players
@@ -50,5 +51,7 @@ export const searchManagers = (q) => api.get('/admin/manager-search', { params: 
 export const seedRookies = (year) => api.post(`/admin/seed-rookies/${year}`).then(r => r.data);
 export const syncSleeperIds = () => api.post('/admin/sync-sleeper-ids').then(r => r.data);
 export const importSleeperPlayers = () => api.post('/admin/import-sleeper-players').then(r => r.data);
+export const importDevyPlayers = () => api.post('/admin/import-devy-players').then(r => r.data);
+export const refreshDevyRankings = () => api.post('/admin/refresh/devy-rankings').then(r => r.data);
 
 export default api;

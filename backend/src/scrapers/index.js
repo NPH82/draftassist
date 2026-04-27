@@ -145,4 +145,35 @@ async function loadPlayerData() {
   return { combine: combine.ok, receiving: receiving.ok, rushing: rushing.ok, espn: espn.ok, roto: roto.ok };
 }
 
-module.exports = { refreshDailyRankings, refreshDepthCharts, loadPlayerData };
+/**
+ * Refresh devy (college prospect) KTC values.
+ * Called on-demand from admin; devy rankings change less frequently than dynasty.
+ */
+async function refreshDevyRankings() {
+  const result = await runScraper('KTC-Devy', keepTradeCutScraper.fetchDevyValues);
+  if (!result.ok || !result.data.length) return { ok: false, error: result.error };
+
+  let matched = 0;
+  for (const p of result.data) {
+    const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const res = await Player.findOneAndUpdate(
+      {
+        name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+        isDevy: true,
+      },
+      {
+        devyKtcValue: p.value,
+        ...(p.college ? { college: p.college } : {}),
+        ...(p.devyClass ? { devyClass: p.devyClass } : {}),
+        lastUpdated: new Date(),
+      },
+      { upsert: false }
+    ).catch(() => null);
+    if (res) matched++;
+  }
+
+  console.log(`[Scraper] KTC-Devy: ${result.data.length} fetched, ${matched} matched to DB players`);
+  return { ok: true, fetched: result.data.length, matched };
+}
+
+module.exports = { refreshDailyRankings, refreshDepthCharts, loadPlayerData, refreshDevyRankings };
