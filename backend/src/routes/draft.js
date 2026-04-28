@@ -205,6 +205,23 @@ function findTradeBackPartners({ rosters, draftOrder, currentPick, safeUntilPick
   return partners;
 }
 
+async function mapWithConcurrency(items, limit, mapper) {
+  const out = new Array(items.length);
+  let index = 0;
+
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      const i = index;
+      index += 1;
+      if (i >= items.length) break;
+      out[i] = await mapper(items[i], i);
+    }
+  });
+
+  await Promise.all(workers);
+  return out;
+}
+
 async function estimateReachDiscipline(profile) {
   const feedback = Array.isArray(profile?.targetFeedback) ? profile.targetFeedback : [];
   const samples = feedback
@@ -276,16 +293,13 @@ router.get('/active', requireAuth, async (req, res) => {
         rosters: null,
       }));
     }
-    const activeDrafts = [];
+    const draftCandidates = leagues.filter((league) => league.draftId && (league.totalRosters || 0) < 32);
 
-    for (const league of leagues) {
-      if (!league.draftId) continue;
-      // 32-team leagues: skip draft recommendations entirely
-      if ((league.totalRosters || 0) >= 32) continue;
+    const activeDrafts = (await mapWithConcurrency(draftCandidates, 8, async (league) => {
       try {
         const draftData = await sleeperService.getDraft(league.draftId);
 
-        if (!isLiveDraftStatus(draftData.status)) continue;
+        if (!isLiveDraftStatus(draftData.status)) return null;
 
         // Ensure roster ownership metadata is present when league came from Sleeper fallback.
         let leagueRosters = Array.isArray(league.rosters) ? league.rosters : null;
@@ -374,7 +388,7 @@ router.get('/active', requireAuth, async (req, res) => {
         const secondsPerPick = draftData.settings?.pick_timer || 60;
         const eta = nextPickNumber ? new Date(Date.now() + (nextPickNumber - picksMade - 1) * secondsPerPick * 1000) : null;
 
-        activeDrafts.push({
+        return {
           draftId: league.draftId,
           leagueId: league.sleeperId,
           leagueName: league.name,
@@ -386,10 +400,11 @@ router.get('/active', requireAuth, async (req, res) => {
           rounds,
           myPickSlot,
           onTheClock,
-          rosters: leagueRosters,
-        });
-      } catch { /* skip unavailable drafts */ }
-    }
+        };
+      } catch {
+        return null;
+      }
+    })).filter(Boolean);
 
     // Sort: on-the-clock first, then by soonest ETA
     activeDrafts.sort((a, b) => {
