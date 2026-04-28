@@ -39,7 +39,7 @@ export const importPlayers = (players) => api.post('/players/import', { players 
 export const recalculateScores = () => api.post('/players/recalculate-scores').then(r => r.data);
 
 // Draft
-export const getActiveDrafts = () => api.get('/draft/active').then(r => r.data);
+export const getActiveDrafts = () => api.get('/draft/active', { timeout: 60000 }).then(r => r.data);
 export const getDraftState = (draftId, mode) => api.get(`/draft/${draftId}`, { params: { mode } }).then(r => r.data);
 export const getDraftTrades = (draftId, playerId) => api.get(`/draft/${draftId}/trades`, { params: { player: playerId } }).then(r => r.data);
 export const getScoutingReport = (draftId, managerId) => api.get(`/draft/${draftId}/scouting/${managerId}`).then(r => r.data);

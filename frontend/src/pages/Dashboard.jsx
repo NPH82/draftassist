@@ -15,6 +15,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [activeDrafts, setActiveDrafts] = useState([]);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
+  const [draftsError, setDraftsError] = useState(null);
   const [dataStatus, setDataStatus] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState(null);
@@ -34,8 +35,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     getActiveDrafts()
-      .then(d => setActiveDrafts(d.drafts || []))
-      .catch(() => {})
+      .then(d => {
+        setActiveDrafts(d.drafts || []);
+        setDraftsError(null);
+      })
+      .catch(() => {
+        setActiveDrafts([]);
+        setDraftsError('Could not load active drafts. Please refresh in a moment.');
+      })
       .finally(() => setLoadingDrafts(false));
     getDataStatus().then(setDataStatus).catch(() => {});
   }, []);
@@ -148,6 +155,10 @@ export default function Dashboard() {
           <h2 className="font-semibold" style={{ marginBottom: '0.75rem' }}>Active Drafts</h2>
           {loadingDrafts ? (
             <div className="text-secondary text-sm">Loading drafts...</div>
+          ) : draftsError ? (
+            <div className="card text-secondary text-sm" style={{ textAlign: 'center', padding: '1.5rem' }}>
+              {draftsError}
+            </div>
           ) : activeDrafts.length === 0 ? (
             <div className="card text-secondary text-sm" style={{ textAlign: 'center', padding: '1.5rem' }}>
               No active drafts right now
