@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { getActiveDrafts, getDataStatus, refreshRankings, triggerLearn, seedRookies, syncSleeperIds, importSleeperPlayers, importDevyPlayers, refreshDevyRankings } from '../services/api';
+import { getActiveDrafts, triggerLearn } from '../services/api';
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
-import FreshnessTag from '../components/DataFreshness/FreshnessTag';
 import DraftTargets from '../components/DraftTargets/DraftTargets';
 import ScoutingHub from '../components/ScoutingHub/ScoutingHub';
 import DevyPool from '../components/DevyPool/DevyPool';
-import { formatEta, timeAgo } from '../utils/formatting';
+import { formatEta } from '../utils/formatting';
 
 export default function Dashboard() {
   const { user, leagues, loadingLeagues } = useApp();
@@ -16,22 +15,9 @@ export default function Dashboard() {
   const [activeDrafts, setActiveDrafts] = useState([]);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
   const [draftsError, setDraftsError] = useState(null);
-  const [dataStatus, setDataStatus] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState(null);
   const [learning, setLearning] = useState(false);
   const [learnMsg, setLearnMsg] = useState(null);
-  const [seeding, setSeeding] = useState(false);
-  const [seedMsg, setSeedMsg] = useState(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState(null);
-  const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState(null);
   const [expandedLeague, setExpandedLeague] = useState(null);
-  const [devyImporting, setDevyImporting] = useState(false);
-  const [devyImportMsg, setDevyImportMsg] = useState(null);
-  const [refreshingDevy, setRefreshingDevy] = useState(false);
-  const [devyRefreshMsg, setDevyRefreshMsg] = useState(null);
 
   useEffect(() => {
     getActiveDrafts()
@@ -44,61 +30,7 @@ export default function Dashboard() {
         setDraftsError('Could not load active drafts. Please refresh in a moment.');
       })
       .finally(() => setLoadingDrafts(false));
-    getDataStatus().then(setDataStatus).catch(() => {});
   }, []);
-
-  const handleRefreshRankings = async () => {
-    setRefreshing(true);
-    setRefreshMsg(null);
-    try {
-      const res = await refreshRankings();
-      setRefreshMsg(res.message);
-      setTimeout(() => getDataStatus().then(setDataStatus).catch(() => {}), 65000);
-    } catch {
-      setRefreshMsg('Refresh failed -- check Render logs');
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  const handleImportSleeperPlayers = async () => {
-    setImporting(true);
-    setImportMsg(null);
-    try {
-      const res = await importSleeperPlayers();
-      setImportMsg(res.message);
-    } catch (err) {
-      setImportMsg(err?.response?.data?.error || 'Import failed');
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const handleSyncSleeperIds = async () => {
-    setSyncing(true);
-    setSyncMsg(null);
-    try {
-      const res = await syncSleeperIds();
-      setSyncMsg(res.message);
-    } catch (err) {
-      setSyncMsg(err?.response?.data?.error || 'Sync failed');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const handleSeedRookies = async (year) => {
-    setSeeding(true);
-    setSeedMsg(null);
-    try {
-      const res = await seedRookies(year);
-      setSeedMsg(res.message);
-    } catch (err) {
-      setSeedMsg(err?.response?.data?.error || 'Seed failed');
-    } finally {
-      setSeeding(false);
-    }
-  };
 
   const handleLearn = async () => {
     setLearning(true);
@@ -110,32 +42,6 @@ export default function Dashboard() {
       setLearnMsg('Scout failed -- check Render logs');
     } finally {
       setLearning(false);
-    }
-  };
-
-  const handleImportDevyPlayers = async () => {
-    setDevyImporting(true);
-    setDevyImportMsg(null);
-    try {
-      const res = await importDevyPlayers();
-      setDevyImportMsg(res.message);
-    } catch (err) {
-      setDevyImportMsg(err?.response?.data?.error || 'Devy import failed');
-    } finally {
-      setDevyImporting(false);
-    }
-  };
-
-  const handleRefreshDevyRankings = async () => {
-    setRefreshingDevy(true);
-    setDevyRefreshMsg(null);
-    try {
-      const res = await refreshDevyRankings();
-      setDevyRefreshMsg(res.message);
-    } catch (err) {
-      setDevyRefreshMsg(err?.response?.data?.error || 'Devy refresh failed');
-    } finally {
-      setRefreshingDevy(false);
     }
   };
 
@@ -279,128 +185,6 @@ export default function Dashboard() {
               })}
             </div>
           )}
-        </section>
-
-        {/* Data Status & Manual Refresh */}
-        <section>
-          <h2 className="font-semibold" style={{ marginBottom: '0.75rem' }}>Rankings Data</h2>
-          <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {dataStatus ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted">Players in DB</span>
-                  <span className="font-semibold">{dataStatus.playerCount}</span>
-                </div>
-                {Object.entries(dataStatus.sources).map(([src, info]) => (
-                  <div key={src} className="flex justify-between text-sm">
-                    <span className="text-muted">{src === 'fantasyPros' ? 'FantasyPros' : src === 'ktc' ? 'KTC' : 'Underdog'}</span>
-                    <span className={info.lastUpdated ? 'text-green' : 'text-yellow'}>
-                      {info.lastUpdated ? `Updated ${timeAgo(info.lastUpdated)}${info.playersWithData ? ` (${info.playersWithData} players)` : ''}` : 'No data yet'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-secondary text-sm">Loading data status...</div>
-            )}
-
-            {refreshMsg && (
-              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
-                {refreshMsg}
-              </div>
-            )}
-
-            <button
-              className="btn btn-secondary text-sm"
-              onClick={handleRefreshRankings}
-              disabled={refreshing}
-            >
-              {refreshing ? 'Triggering refresh...' : 'Refresh Rankings Now'}
-            </button>
-            <div className="text-xs text-muted">
-              Scrapes FantasyPros, KTC, and Underdog. Data updates ~60s after triggering. Runs automatically daily at 3am UTC.
-            </div>
-
-            {seedMsg && (
-              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
-                {seedMsg}
-              </div>
-            )}
-            <button
-              className="btn btn-secondary text-sm"
-              onClick={() => handleSeedRookies(2026)}
-              disabled={seeding}
-            >
-              {seeding ? 'Seeding...' : 'Seed 2026 Rookie Class'}
-            </button>
-            <div className="text-xs text-muted">
-              Adds 2026 NFL Draft dynasty Top 48 to the player database (skips if already seeded).
-            </div>
-
-            {syncMsg && (
-              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
-                {syncMsg}
-              </div>
-            )}
-            <button
-              className="btn btn-secondary text-sm"
-              onClick={handleSyncSleeperIds}
-              disabled={syncing}
-            >
-              {syncing ? 'Syncing Sleeper IDs...' : 'Sync Sleeper Player IDs'}
-            </button>
-            <div className="text-xs text-muted">
-              Fetches the Sleeper player database and back-fills missing player IDs so scraper data matches correctly.
-            </div>
-
-            {importMsg && (
-              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
-                {importMsg}
-              </div>
-            )}
-            <button
-              className="btn btn-secondary text-sm"
-              onClick={handleImportSleeperPlayers}
-              disabled={importing}
-            >
-              {importing ? 'Importing...' : 'Import All Sleeper Players'}
-            </button>
-            <div className="text-xs text-muted">
-              Upserts all QB/RB/WR/TE players from Sleeper into the database so veteran rosters evaluate correctly. Safe to re-run.
-            </div>
-
-            {devyImportMsg && (
-              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
-                {devyImportMsg}
-              </div>
-            )}
-            <button
-              className="btn btn-secondary text-sm"
-              onClick={handleImportDevyPlayers}
-              disabled={devyImporting}
-            >
-              {devyImporting ? 'Importing devy players...' : 'Import Devy Players'}
-            </button>
-            <div className="text-xs text-muted">
-              Seeds college prospects (Sleeper <code>years_exp: -1</code>) into the database. Run once, then re-run after each NFL draft to add newly eligible prospects.
-            </div>
-
-            {devyRefreshMsg && (
-              <div className="text-xs text-green" style={{ padding: '0.4rem 0.6rem', background: '#14532d33', borderRadius: 4 }}>
-                {devyRefreshMsg}
-              </div>
-            )}
-            <button
-              className="btn btn-secondary text-sm"
-              onClick={handleRefreshDevyRankings}
-              disabled={refreshingDevy}
-            >
-              {refreshingDevy ? 'Refreshing devy rankings...' : 'Refresh Devy Rankings (KTC)'}
-            </button>
-            <div className="text-xs text-muted">
-              Fetches KTC devy values and updates all college prospects in the database.
-            </div>
-          </div>
         </section>
 
         {/* Scout Opponents */}
