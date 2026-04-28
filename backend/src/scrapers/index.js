@@ -255,22 +255,57 @@ async function refreshDevyRankings() {
     }
   }
 
-  // ── Pass 2: Augment from NFLMDB for any devy player KTC may have missed ─
+  // ── Pass 2: NFLMDB — augment existing devy players OR create when KTC missed them ─
   for (const p of (nflmdbResult.data || [])) {
+    if (!p.name || !DEVY_SKILL_POSITIONS.has(p.position)) continue;
+
     const key = devyNorm(p.name);
+    const fp = fpMap[key] || {};
     const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    await Player.updateOne(
-      { name: { $regex: new RegExp(`^${escapedName}$`, 'i') }, isDevy: true },
-      {
-        $set: {
-          bigBoardRank: p.bigBoardRank,
-          ...(p.college    ? { college: p.college }       : {}),
-          ...(p.devyClass  ? { devyClass: p.devyClass }   : {}),
-          lastUpdated: new Date(),
-        },
-      },
-      { upsert: false }
-    ).catch(() => {});
+    const existing = await Player.findOne({
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+    }).lean();
+
+    if (existing) {
+      // Never promote a known active veteran to isDevy
+      if (existing.isDevy === false && existing.team) continue;
+      await Player.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            isDevy: true,
+            bigBoardRank: p.bigBoardRank,
+            ...(p.college   ? { college: p.college }     : {}),
+            ...(p.devyClass ? { devyClass: p.devyClass } : {}),
+            ...(fp.rank     ? { devyFpRank: fp.rank }    : {}),
+            lastUpdated: new Date(),
+          },
+        }
+      ).catch(() => {});
+      // Only count as updated if KTC didn't already handle it
+      if (!ktcResult.ok) updated++;
+    } else {
+      // KTC failed or didn't have this player — create from NFLMDB
+      try {
+        await Player.create({
+          name: p.name,
+          position: p.position,
+          team: null,
+          college: p.college || null,
+          bigBoardRank: p.bigBoardRank || null,
+          devyClass: p.devyClass || null,
+          devyFpRank: fp.rank || null,
+          isDevy: true,
+          isRookie: false,
+          ktcValue: 0,
+          fantasyProsValue: 0,
+          dataSource: 'devy-scrape',
+        });
+        created++;
+      } catch (e) {
+        // duplicate key or validation error — skip silently
+      }
+    }
   }
 
   console.log(
