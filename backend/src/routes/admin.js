@@ -347,16 +347,87 @@ router.post('/import-devy-players', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/admin/fix-devy-flags
+// Compares every isDevy=true DB record against the live Sleeper player map and strips isDevy
+// from any player Sleeper no longer considers a devy prospect (retired, active NFL vet, etc.).
+// Run this once to repair a polluted DB, then re-run after each NFL draft to clean up graduates.
+router.post('/fix-devy-flags', requireAuth, async (req, res) => {
+  try {
+    const { getAllPlayers } = require('../services/sleeperService');
+    const sleeperMap = await getAllPlayers('nfl');
+
+    const parseYearsExp = (sp = {}) => {
+      const v = Number(sp.years_exp);
+      return Number.isFinite(v) ? v : null;
+    };
+
+    const isValidDevy = (sp = {}) => {
+      if (!sp || typeof sp !== 'object') return false;
+      const yearsExp = parseYearsExp(sp);
+      if (yearsExp === -1) return true;
+      if (sp.active === false) return false;
+      const statusLower = (sp.status || '').toLowerCase();
+      if (statusLower === 'inactive' || statusLower === 'retired') return false;
+      return yearsExp === 0 && !sp.team && !!sp.college;
+    };
+
+    const devyPlayers = await Player.find({ isDevy: true }).select('_id sleeperId name').lean();
+    let cleared = 0;
+    let kept = 0;
+    const clearedNames = [];
+
+    for (const p of devyPlayers) {
+      if (!p.sleeperId) { kept++; continue; } // no Sleeper link — leave alone
+      const sp = sleeperMap[p.sleeperId];
+      if (isValidDevy(sp)) {
+        kept++;
+      } else {
+        await Player.updateOne({ _id: p._id }, { $set: { isDevy: false } });
+        cleared++;
+        if (clearedNames.length < 40) clearedNames.push(p.name);
+      }
+    }
+
+    console.log(`[Admin] fix-devy-flags: ${kept} kept, ${cleared} cleared`);
+    res.json({
+      ok: true,
+      message: `Devy flag repair complete: ${kept} valid devy players kept, ${cleared} incorrectly tagged players cleared.`,
+      kept,
+      cleared,
+      sample: clearedNames,
+    });
+  } catch (err) {
+    console.error('[Admin] fix-devy-flags error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/refresh/devy-rankings
-// Fetches KTC devy values and updates devyKtcValue on all isDevy players in DB.
+// Fetches KTC devy values, NFLMDB big board, and FP devy rankings.
+// Upserts real college prospects into DB with isDevy=true.
+// Safe to run repeatedly — fires async so the response returns immediately.
 router.post('/refresh/devy-rankings', requireAuth, async (req, res) => {
   try {
     console.log('[Admin] Devy rankings refresh triggered');
     refreshDevyRankings()
-      .then(r => console.log('[Admin] Devy rankings refresh complete', r))
+      .then(r => console.log('[Admin] Devy rankings refresh complete', JSON.stringify(r)))
       .catch(err => console.error('[Admin] Devy rankings refresh error', err));
-    res.json({ ok: true, message: 'Devy rankings refresh started -- KTC devy values will update within ~60 seconds' });
+    res.json({ ok: true, message: 'Devy rankings refresh started — KTC + NFLMDB big board + FP will update within ~90 seconds' });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/refresh/devy-rankings/sync
+// Same as above but waits for completion and returns full results.
+// Useful for one-time seeding or verifying the import.
+router.post('/refresh/devy-rankings/sync', requireAuth, async (req, res) => {
+  try {
+    console.log('[Admin] Devy rankings sync refresh triggered');
+    const result = await refreshDevyRankings();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[Admin] Devy rankings sync error', err.message);
     res.status(500).json({ error: err.message });
   }
 });

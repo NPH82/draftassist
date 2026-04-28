@@ -28,8 +28,12 @@ function parseYearsExp(player = {}) {
 function isHeuristicDevyCandidate(sp = {}) {
   const yearsExp = parseYearsExp(sp);
   // Sleeper no longer consistently marks devy as years_exp === -1.
-  // Fallback: no NFL team, has college, and not yet accrued NFL experience.
-  return yearsExp !== null && yearsExp <= 0 && !sp.team && !!sp.college;
+  // Fallback: no NFL team, has college, years_exp exactly 0, and Sleeper confirms active.
+  // Require active !== false to exclude retired/cut veterans Sleeper still has on record.
+  if (sp.active === false) return false;
+  const statusLower = (sp.status || '').toLowerCase();
+  if (statusLower === 'inactive' || statusLower === 'retired') return false;
+  return yearsExp === 0 && !sp.team && !!sp.college;
 }
 
 // ---------------------------------------------------------------------------

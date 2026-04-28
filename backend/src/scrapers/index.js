@@ -5,6 +5,7 @@
 
 const fantasyProsScraper = require('./fantasyProsScraper');
 const keepTradeCutScraper = require('./keepTradeCutScraper');
+const nflMockDraftScraper = require('./nflMockDraftScraper');
 const ourLadsScraper = require('./ourLadsScraper');
 const pfrScraper = require('./pfrScraper');
 const espnScraper = require('./espnScraper');
@@ -145,35 +146,147 @@ async function loadPlayerData() {
   return { combine: combine.ok, receiving: receiving.ok, rushing: rushing.ok, espn: espn.ok, roto: roto.ok };
 }
 
+const DEVY_SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
+
+// Normalise for fuzzy name matching
+function devyNorm(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
- * Refresh devy (college prospect) KTC values.
- * Called on-demand from admin; devy rankings change less frequently than dynasty.
+ * Refresh devy (college prospect) rankings from three sources:
+ *   1. KeepTradeCut API  — primary: fantasy values, draft-class year
+ *   2. NFL Mock Draft DB  — secondary: NFL draft projection, full college name
+ *   3. FantasyPros       — supplementary: devyFpRank
+ *
+ * Unlike the old version this function UPSERTS new records so the devy pool
+ * is seeded from real rankings data rather than relying on Sleeper alone.
+ * Existing non-devy players (e.g. veterans) are never overwritten with isDevy.
  */
 async function refreshDevyRankings() {
-  const result = await runScraper('KTC-Devy', keepTradeCutScraper.fetchDevyValues);
-  if (!result.ok || !result.data.length) return { ok: false, error: result.error };
+  const devyYear = new Date().getFullYear() + 1; // default to next draft class (2027)
 
-  let matched = 0;
-  for (const p of result.data) {
-    const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const res = await Player.findOneAndUpdate(
-      {
-        name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
-        isDevy: true,
-      },
-      {
-        devyKtcValue: p.value,
-        ...(p.college ? { college: p.college } : {}),
-        ...(p.devyClass ? { devyClass: p.devyClass } : {}),
-        lastUpdated: new Date(),
-      },
-      { upsert: false }
-    ).catch(() => null);
-    if (res) matched++;
+  // Fetch all sources in parallel; failures are non-fatal
+  const [ktcResult, nflmdbResult, fpResult] = await Promise.all([
+    runScraper('KTC-Devy', keepTradeCutScraper.fetchDevyValues),
+    runScraper('NFLMDB-BigBoard', () => nflMockDraftScraper.fetchBigBoard(devyYear)),
+    runScraper('FP-Devy', fantasyProsScraper.fetchDevyRankings),
+  ]);
+
+  if (!ktcResult.ok && !nflmdbResult.ok) {
+    return { ok: false, error: 'KTC and NFLMDB both failed — no devy data available' };
   }
 
-  console.log(`[Scraper] KTC-Devy: ${result.data.length} fetched, ${matched} matched to DB players`);
-  return { ok: true, fetched: result.data.length, matched };
+  // Build lookup maps keyed by normalised name
+  const nflmdbMap = {};
+  for (const p of (nflmdbResult.data || [])) {
+    nflmdbMap[devyNorm(p.name)] = p;
+  }
+
+  const fpMap = {};
+  for (const p of (fpResult.data || [])) {
+    fpMap[devyNorm(p.name)] = p;
+  }
+
+  let created = 0;
+  let updated = 0;
+
+  // ── Pass 1: KTC is primary ──────────────────────────────────────────────
+  for (const p of (ktcResult.data || [])) {
+    if (!p.name || !DEVY_SKILL_POSITIONS.has(p.position)) continue;
+
+    const key = devyNorm(p.name);
+    const nflmdb = nflmdbMap[key] || {};
+    const fp = fpMap[key] || {};
+
+    const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const existing = await Player.findOne({
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+    }).lean();
+
+    const devyClass = p.devyClass || nflmdb.devyClass || null;
+    const college   = nflmdb.college || p.college || null;
+
+    if (existing) {
+      // Never promote a known veteran (years_exp > 0) to isDevy
+      if (existing.isDevy === false && existing.team) {
+        // Active NFL player — skip
+        continue;
+      }
+      const setFields = {
+        devyKtcValue: p.value,
+        isDevy: true,
+        isRookie: false,
+        lastUpdated: new Date(),
+      };
+      if (devyClass)              setFields.devyClass    = devyClass;
+      if (college)                setFields.college      = college;
+      if (nflmdb.bigBoardRank)    setFields.bigBoardRank = nflmdb.bigBoardRank;
+      if (fp.rank)                setFields.devyFpRank   = fp.rank;
+      await Player.updateOne({ _id: existing._id }, { $set: setFields });
+      updated++;
+    } else {
+      // Brand-new devy prospect — create record
+      try {
+        await Player.create({
+          name: p.name,
+          position: p.position,
+          team: null,
+          college: college || null,
+          devyKtcValue: p.value,
+          devyClass: devyClass || null,
+          bigBoardRank: nflmdb.bigBoardRank || null,
+          devyFpRank: fp.rank || null,
+          isDevy: true,
+          isRookie: false,
+          ktcValue: 0,
+          fantasyProsValue: 0,
+          dataSource: 'devy-scrape',
+        });
+        created++;
+      } catch (e) {
+        // duplicate key or validation error — skip silently
+      }
+    }
+  }
+
+  // ── Pass 2: Augment from NFLMDB for any devy player KTC may have missed ─
+  for (const p of (nflmdbResult.data || [])) {
+    const key = devyNorm(p.name);
+    const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await Player.updateOne(
+      { name: { $regex: new RegExp(`^${escapedName}$`, 'i') }, isDevy: true },
+      {
+        $set: {
+          bigBoardRank: p.bigBoardRank,
+          ...(p.college    ? { college: p.college }       : {}),
+          ...(p.devyClass  ? { devyClass: p.devyClass }   : {}),
+          lastUpdated: new Date(),
+        },
+      },
+      { upsert: false }
+    ).catch(() => {});
+  }
+
+  console.log(
+    `[Scraper] refreshDevyRankings: ${created} created, ${updated} updated ` +
+    `| KTC: ${ktcResult.data?.length ?? 0} | NFLMDB: ${nflmdbResult.data?.length ?? 0} | FP: ${fpResult.data?.length ?? 0}`
+  );
+  return {
+    ok: true,
+    created,
+    updated,
+    sources: {
+      ktc:    { ok: ktcResult.ok,    count: ktcResult.data?.length ?? 0 },
+      nflmdb: { ok: nflmdbResult.ok, count: nflmdbResult.data?.length ?? 0 },
+      fp:     { ok: fpResult.ok,     count: fpResult.data?.length ?? 0 },
+    },
+  };
 }
 
 module.exports = { refreshDailyRankings, refreshDepthCharts, loadPlayerData, refreshDevyRankings };

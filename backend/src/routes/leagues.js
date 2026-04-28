@@ -48,10 +48,16 @@ function normalizeName(value) {
 }
 
 function isSleeperDevyPlayer(sp = {}) {
+  if (!sp || typeof sp !== 'object') return false;
+  // Sleeper's official devy flag.
   const yearsExp = parseYearsExp(sp);
   if (yearsExp === -1) return true;
-  // Sleeper fallback: treat no-team college players with <=0 experience as devy-like.
-  return yearsExp !== null && yearsExp <= 0 && !sp.team && !!sp.college;
+  // Require player to be active in Sleeper — retired/inactive vets must never qualify.
+  if (sp.active === false) return false;
+  const statusLower = (sp.status || '').toLowerCase();
+  if (statusLower === 'inactive' || statusLower === 'retired') return false;
+  // Fallback: genuinely pre-NFL college prospect — years_exp exactly 0, no team, college present.
+  return yearsExp === 0 && !sp.team && !!sp.college;
 }
 
 function getPlayerAliasFromMetadata(metadata = {}, playerId) {

@@ -71,6 +71,7 @@ const playerSchema = new mongoose.Schema({
   devyClass: Number,          // expected NFL draft year (e.g. 2027, 2028)
   devyKtcValue: Number,       // KTC's separate devy dynasty value scale
   devyFpRank: Number,         // FantasyPros devy-specific rank
+  bigBoardRank: Number,       // NFLMDB consensus big board rank for the prospect's class year
 
   // Metadata
   dataSource: { type: String, default: 'seed' },
