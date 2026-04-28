@@ -72,6 +72,9 @@ const playerSchema = new mongoose.Schema({
   devyKtcValue: Number,       // KTC's separate devy dynasty value scale
   devyFpRank: Number,         // FantasyPros devy-specific rank
   bigBoardRank: Number,       // NFLMDB consensus big board rank for the prospect's class year
+  sheetRank: Number,          // Overall rank from the DraftAssistant curated Google Sheet
+  sheetRating: Number,        // Composite rating from the curated sheet
+  sheetAvgOvrRank: Number,    // Average overall rank across sources in the curated sheet
 
   // Metadata
   dataSource: { type: String, default: 'seed' },

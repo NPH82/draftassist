@@ -4,6 +4,7 @@
  */
 
 const fantasyProsScraper = require('./fantasyProsScraper');
+const googleSheetDevyScraper = require('./googleSheetDevyScraper');
 const keepTradeCutScraper = require('./keepTradeCutScraper');
 const nflMockDraftScraper = require('./nflMockDraftScraper');
 const ourLadsScraper = require('./ourLadsScraper');
@@ -192,14 +193,15 @@ async function refreshDevyRankings() {
   }
 
   // Fetch all sources in parallel; failures are non-fatal
-  const [ktcResult, nflmdbResult, fpResult] = await Promise.all([
+  const [ktcResult, nflmdbResult, fpResult, sheetResult] = await Promise.all([
     runScraper('KTC-Devy', keepTradeCutScraper.fetchDevyValues),
     runScraper('NFLMDB-BigBoard', () => nflMockDraftScraper.fetchBigBoard(devyYear)),
     runScraper('FP-Devy', fantasyProsScraper.fetchDevyRankings),
+    runScraper('GoogleSheet-Devy', googleSheetDevyScraper.fetchDevyRankingsSheet),
   ]);
 
-  if (!ktcResult.ok && !nflmdbResult.ok) {
-    return { ok: false, error: 'KTC and NFLMDB both failed — no devy data available' };
+  if (!ktcResult.ok && !nflmdbResult.ok && !sheetResult.ok) {
+    return { ok: false, error: 'KTC, NFLMDB, and GoogleSheet all failed — no devy data available' };
   }
 
   // Build lookup maps keyed by normalised name
@@ -211,6 +213,11 @@ async function refreshDevyRankings() {
   const fpMap = {};
   for (const p of (fpResult.data || [])) {
     fpMap[devyNorm(p.name)] = p;
+  }
+
+  const sheetMap = {};
+  for (const p of (sheetResult.data || [])) {
+    sheetMap[devyNorm(p.name)] = p;
   }
 
   let created = 0;
@@ -336,9 +343,63 @@ async function refreshDevyRankings() {
     }
   }
 
+  // ── Pass 3: Google Sheet — augment with sheetRank / rating / avgOvrRank; create if missed above ─
+  for (const p of (sheetResult.data || [])) {
+    if (!p.name || !DEVY_SKILL_POSITIONS.has(p.position)) continue;
+
+    const cleanName = sanitizeDevyName(p.name);
+    const key = devyNorm(cleanName);
+    const nflmdb = nflmdbMap[key] || {};
+    const fp = fpMap[key] || {};
+    const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const existing = await Player.findOne({
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+    }).lean();
+
+    const setFields = {
+      name: cleanName,
+      position: p.position,
+      isDevy: true,
+      sheetRank: p.sheetRank,
+      lastUpdated: new Date(),
+    };
+    if (p.rating !== null)     setFields.sheetRating   = p.rating;
+    if (p.avgOvrRank !== null) setFields.sheetAvgOvrRank = p.avgOvrRank;
+    if (p.fortyTime !== null)  setFields['athletics.fortyTime'] = p.fortyTime;
+    if (fp.rank)               setFields.devyFpRank     = fp.rank;
+
+    if (existing) {
+      if (existing.isDevy === false && existing.team) continue;
+      await Player.updateOne({ _id: existing._id }, { $set: setFields }).catch(() => {});
+    } else {
+      try {
+        await Player.create({
+          name: cleanName,
+          position: p.position,
+          team: null,
+          college: nflmdb.college || null,
+          sheetRank: p.sheetRank,
+          sheetRating: p.rating || null,
+          sheetAvgOvrRank: p.avgOvrRank || null,
+          devyClass: nflmdb.devyClass || null,
+          devyFpRank: fp.rank || null,
+          isDevy: true,
+          isRookie: false,
+          ktcValue: 0,
+          fantasyProsValue: 0,
+          dataSource: 'devy-scrape',
+        });
+        created++;
+      } catch (e) {
+        // duplicate key or validation error — skip silently
+      }
+    }
+  }
+
   console.log(
     `[Scraper] refreshDevyRankings: ${created} created, ${updated} updated ` +
-    `| KTC: ${ktcResult.data?.length ?? 0} | NFLMDB: ${nflmdbResult.data?.length ?? 0} | FP: ${fpResult.data?.length ?? 0}`
+    `| KTC: ${ktcResult.data?.length ?? 0} | NFLMDB: ${nflmdbResult.data?.length ?? 0}` +
+    ` | FP: ${fpResult.data?.length ?? 0} | Sheet: ${sheetResult.data?.length ?? 0}`
   );
   return {
     ok: true,
@@ -348,6 +409,7 @@ async function refreshDevyRankings() {
       ktc:    { ok: ktcResult.ok,    count: ktcResult.data?.length ?? 0 },
       nflmdb: { ok: nflmdbResult.ok, count: nflmdbResult.data?.length ?? 0 },
       fp:     { ok: fpResult.ok,     count: fpResult.data?.length ?? 0 },
+      sheet:  { ok: sheetResult.ok,  count: sheetResult.data?.length ?? 0 },
     },
   };
 }
