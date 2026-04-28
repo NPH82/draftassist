@@ -15,8 +15,18 @@ export function AppProvider({ children }) {
     if (!token) { setLoadingUser(false); return; }
 
     getMe()
-      .then(u => { setUser(u); return getLeagues(); })
-      .then(data => setLeagues(data.leagues || []))
+      .then(async (u) => {
+        setUser(u);
+        try {
+          const data = await getLeagues();
+          setLeagues(data.leagues || []);
+          setError(null);
+        } catch {
+          // Keep authenticated session even if league sync fails temporarily.
+          setLeagues([]);
+          setError('Could not load leagues right now. Pull to refresh in a moment.');
+        }
+      })
       .catch(() => { localStorage.removeItem('authToken'); })
       .finally(() => setLoadingUser(false));
   }, []);

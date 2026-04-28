@@ -20,7 +20,7 @@ export const getMe = () => api.get('/auth/me').then(r => r.data);
 // Leagues
 export const getLeagues = (year) => {
   const params = year ? { year } : undefined;
-  return api.get('/leagues', { params }).then(r => r.data);
+  return api.get('/leagues', { params, timeout: 60000 }).then(r => r.data);
 };
 export const getLeague = (id) => api.get(`/leagues/${id}`).then(r => r.data);
 export const getLeagueAlerts = (id, days = 30) => api.get(`/leagues/${id}/alerts`, { params: { days } }).then(r => r.data);

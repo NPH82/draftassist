@@ -103,6 +103,23 @@ function isActiveLeagueStatus(status) {
   return normalized === 'pre_draft' || normalized === 'drafting' || normalized === 'in_season';
 }
 
+async function mapWithConcurrency(items, limit, mapper) {
+  const out = new Array(items.length);
+  let index = 0;
+
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      const i = index;
+      index += 1;
+      if (i >= items.length) break;
+      out[i] = await mapper(items[i], i);
+    }
+  });
+
+  await Promise.all(workers);
+  return out;
+}
+
 async function resolveDraftClassYear({ requestedYear, draftData, league }) {
   const currentYear = new Date().getFullYear();
   const explicit = toInt(requestedYear);
@@ -297,87 +314,92 @@ router.get('/', requireAuth, async (req, res) => {
       }
     }
 
-    const leagueData = await Promise.all(sleeperLeagues.map(async (sl) => {
-      const rosters = await sleeperService.getRosters(sl.league_id);
-      const users = await sleeperService.buildUserMap(sl.league_id);
+    const leagueData = await mapWithConcurrency(sleeperLeagues, 8, async (sl) => {
+      try {
+        const rosters = await sleeperService.getRosters(sl.league_id);
+        const users = await sleeperService.buildUserMap(sl.league_id);
 
-      const baseRosters = rosters.map(r => {
-        const playerIds = r.players || [];
-        const taxiPlayerIds = r.taxi || [];
-        const allPlayerIds = [...new Set([...playerIds, ...taxiPlayerIds])];
-        const settings = r.settings || {};
-        const pointsFor = Number(settings.fpts || 0) + (Number(settings.fpts_decimal || 0) / 100);
+        const baseRosters = rosters.map(r => {
+          const playerIds = r.players || [];
+          const taxiPlayerIds = r.taxi || [];
+          const allPlayerIds = [...new Set([...playerIds, ...taxiPlayerIds])];
+          const settings = r.settings || {};
+          const pointsFor = Number(settings.fpts || 0) + (Number(settings.fpts_decimal || 0) / 100);
+          return {
+            rosterId: r.roster_id,
+            ownerId: r.owner_id,
+            ownerUsername: users[r.owner_id]?.username || 'Unknown',
+            ownerTeamName: users[r.owner_id]?.teamName || null,
+            playerIds,
+            taxiPlayerIds,
+            allPlayerIds,
+            picks: r.picks,
+            wins: Number(settings.wins || 0),
+            losses: Number(settings.losses || 0),
+            ties: Number(settings.ties || 0),
+            pointsFor,
+          };
+        });
+
+        const leagueOutlooks = computeLeagueOutlooks(baseRosters, playerMap, sl.roster_positions, sl.scoring_settings);
+        const outlookByRosterId = Object.fromEntries(
+          leagueOutlooks.map(o => [o.rosterId, o])
+        );
+
+        const processedRosters = baseRosters.map((r) => {
+          const outlook = outlookByRosterId[r.rosterId] || {};
+          return {
+            ...r,
+            rosterMaturityScore: outlook.rosterMaturityScore,
+            winWindowLabel: outlook.winWindowLabel,
+            winWindowReason: outlook.winWindowReason,
+            positionalNeeds: outlook.positionalNeeds || analyzePositionalNeeds(r.allPlayerIds, playerMap, sl.roster_positions, sl.scoring_settings),
+            standingRank: outlook.outlookMeta?.standingRank || null,
+            scoreRank: outlook.outlookMeta?.scoreRank || null,
+            outlookMeta: outlook.outlookMeta || null,
+          };
+        });
+
+        // Cache in DB
+        await League.findOneAndUpdate(
+          { sleeperId: sl.league_id },
+          {
+            sleeperId: sl.league_id,
+            name: sl.name,
+            season: sl.season,
+            status: sl.status,
+            totalRosters: sl.total_rosters,
+            scoringSettings: sl.scoring_settings,
+            rosterPositions: sl.roster_positions,
+            isSuperFlex: sleeperService.detectSuperFlex(sl.roster_positions),
+            isPpr: sleeperService.detectPpr(sl.scoring_settings),
+            draftId: sl.draft_id,
+            rosters: processedRosters,
+            lastUpdated: new Date(),
+          },
+          { upsert: true, returnDocument: 'after' }
+        );
+
         return {
-          rosterId: r.roster_id,
-          ownerId: r.owner_id,
-          ownerUsername: users[r.owner_id]?.username || 'Unknown',
-          ownerTeamName: users[r.owner_id]?.teamName || null,
-          playerIds,
-          taxiPlayerIds,
-          allPlayerIds,
-          picks: r.picks,
-          wins: Number(settings.wins || 0),
-          losses: Number(settings.losses || 0),
-          ties: Number(settings.ties || 0),
-          pointsFor,
-        };
-      });
-
-      const leagueOutlooks = computeLeagueOutlooks(baseRosters, playerMap, sl.roster_positions, sl.scoring_settings);
-      const outlookByRosterId = Object.fromEntries(
-        leagueOutlooks.map(o => [o.rosterId, o])
-      );
-
-      const processedRosters = baseRosters.map((r) => {
-        const outlook = outlookByRosterId[r.rosterId] || {};
-        return {
-          ...r,
-          rosterMaturityScore: outlook.rosterMaturityScore,
-          winWindowLabel: outlook.winWindowLabel,
-          winWindowReason: outlook.winWindowReason,
-          positionalNeeds: outlook.positionalNeeds || analyzePositionalNeeds(r.allPlayerIds, playerMap, sl.roster_positions, sl.scoring_settings),
-          standingRank: outlook.outlookMeta?.standingRank || null,
-          scoreRank: outlook.outlookMeta?.scoreRank || null,
-          outlookMeta: outlook.outlookMeta || null,
-        };
-      });
-
-      // Cache in DB
-      await League.findOneAndUpdate(
-        { sleeperId: sl.league_id },
-        {
-          sleeperId: sl.league_id,
+          leagueId: sl.league_id,
           name: sl.name,
           season: sl.season,
           status: sl.status,
-          totalRosters: sl.total_rosters,
-          scoringSettings: sl.scoring_settings,
-          rosterPositions: sl.roster_positions,
           isSuperFlex: sleeperService.detectSuperFlex(sl.roster_positions),
           isPpr: sleeperService.detectPpr(sl.scoring_settings),
           draftId: sl.draft_id,
+          draftStatus: sl.status,
+          totalRosters: sl.total_rosters,
+          myRoster: processedRosters.find(r => r.ownerId === sleeperId) || null,
           rosters: processedRosters,
-          lastUpdated: new Date(),
-        },
-        { upsert: true, returnDocument: 'after' }
-      );
+        };
+      } catch (leagueErr) {
+        console.warn(`[Leagues] Skipping league ${sl.league_id}: ${leagueErr.message}`);
+        return null;
+      }
+    });
 
-      return {
-        leagueId: sl.league_id,
-        name: sl.name,
-        season: sl.season,
-        status: sl.status,
-        isSuperFlex: sleeperService.detectSuperFlex(sl.roster_positions),
-        isPpr: sleeperService.detectPpr(sl.scoring_settings),
-        draftId: sl.draft_id,
-        draftStatus: sl.status,
-        totalRosters: sl.total_rosters,
-        myRoster: processedRosters.find(r => r.ownerId === sleeperId) || null,
-        rosters: processedRosters,
-      };
-    }));
-
-    res.json({ leagues: leagueData });
+    res.json({ leagues: leagueData.filter(Boolean) });
   } catch (err) {
     console.error('[Leagues]', err.message);
     res.status(500).json({ error: err.message });
