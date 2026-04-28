@@ -834,9 +834,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         const sp = sleeperPlayerMap[p.sleeperId] || {};
         // Require an authoritative Sleeper match for available devy options.
         if (!Object.keys(sp).length) return null;
-        // Skip players who have now graduated to the NFL (years_exp !== -1).
-        const yearsExp = parseYearsExp(sp);
-        if (yearsExp !== null && !isSleeperDevyPlayer(sp)) return null;
+        // Only include active devy-eligible Sleeper profiles.
+        if (!isSleeperDevyPlayer(sp)) return null;
         return {
           sleeperId: p.sleeperId,
           name: p.name,

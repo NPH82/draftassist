@@ -200,10 +200,10 @@ export default function DevyPool({ leagueId }) {
   const groupedRowCount = groupedPositionRows.reduce((sum, g) => sum + g.rows.length, 0);
 
   const tabLabel = (key) => ({
-    available: `Available (${filterPos(data.available || []).length})`,
-    rostered:  `Rostered (${filterPos(data.rostered || []).length})`,
-    graduated: `Graduated (${graduated.length})`,
-    compare: `Devy vs Rookie (${compareMode === 'position' && posFilter === 'ALL' ? groupedRowCount : comparisonRows.length})`,
+    available: `Available Devy (${filterPos(data.available || []).length})`,
+    rostered:  `Drafted Devy (${filterPos(data.rostered || []).length})`,
+    graduated: `Drafted to NFL (${graduated.length})`,
+    compare: `Board Compare (${compareMode === 'position' && posFilter === 'ALL' ? groupedRowCount : comparisonRows.length})`,
   }[key]);
 
   return (
