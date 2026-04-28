@@ -233,10 +233,26 @@ async function estimateReachDiscipline(profile) {
 router.get('/', requireAuth, async (req, res) => {
   try {
     const { sleeperId } = req.user;
-    const year = req.query.year || '2026';
+    const year = (req.query.year || '').toString().trim();
 
-    // Fetch fresh from Sleeper
-    const sleeperLeagues = await sleeperService.getUserLeagues(sleeperId, 'nfl', year);
+    // Fetch fresh from Sleeper.
+    // If year is not provided, scan recent seasons so users don't see an empty
+    // league list simply because the frontend queried an outdated default year.
+    let sleeperLeagues = [];
+    if (year) {
+      sleeperLeagues = await sleeperService.getUserLeagues(sleeperId, 'nfl', year);
+    } else {
+      const currentYear = new Date().getFullYear();
+      const seasons = [currentYear + 1, currentYear, currentYear - 1].map(String);
+      const perSeason = await Promise.all(
+        seasons.map((season) => sleeperService.getUserLeagues(sleeperId, 'nfl', season).catch(() => []))
+      );
+      const byId = new Map();
+      for (const league of perSeason.flat()) {
+        if (league?.league_id && !byId.has(league.league_id)) byId.set(league.league_id, league);
+      }
+      sleeperLeagues = [...byId.values()];
+    }
 
     // Build player map for win window calculations.
     // Primary: our DB (has DAS scores, KTC/FP values, etc.), keyed by sleeperId.

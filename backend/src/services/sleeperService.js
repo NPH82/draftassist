@@ -17,7 +17,7 @@ async function getUser(username) {
 
 // ── Leagues ───────────────────────────────────────────────────────────────────
 
-async function getUserLeagues(userId, sport = 'nfl', season = '2026') {
+async function getUserLeagues(userId, sport = 'nfl', season = String(new Date().getFullYear())) {
   const { data } = await http.get(`/user/${userId}/leagues/${sport}/${season}`);
   return data;  // array of league objects
 }
