@@ -258,6 +258,7 @@ router.get('/', requireAuth, async (req, res) => {
     const { sleeperId } = req.user;
     const year = (req.query.year || '').toString().trim();
     const activeOnly = String(req.query.activeOnly || 'true').toLowerCase() !== 'false';
+    const includeRosters = String(req.query.includeRosters || 'false').toLowerCase() === 'true';
 
     // Fetch fresh from Sleeper.
     // If year is not provided, scan recent seasons so users don't see an empty
@@ -391,7 +392,7 @@ router.get('/', requireAuth, async (req, res) => {
           draftStatus: sl.status,
           totalRosters: sl.total_rosters,
           myRoster: processedRosters.find(r => r.ownerId === sleeperId) || null,
-          rosters: processedRosters,
+          ...(includeRosters ? { rosters: processedRosters } : {}),
         };
       } catch (leagueErr) {
         console.warn(`[Leagues] Skipping league ${sl.league_id}: ${leagueErr.message}`);
