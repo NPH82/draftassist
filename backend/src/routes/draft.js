@@ -258,9 +258,24 @@ async function estimateReachDiscipline(profile) {
 router.get('/active', requireAuth, async (req, res) => {
   try {
     const { sleeperId } = req.user;
+    const isLiveDraftStatus = (status) => {
+      const s = String(status || '').toLowerCase();
+      return s === 'drafting' || s === 'paused';
+    };
 
-    // Get user's leagues
-    const leagues = await League.find({ 'rosters.ownerId': sleeperId }).lean();
+    // Prefer cached leagues from DB, but fall back to Sleeper directly if cache is empty.
+    let leagues = await League.find({ 'rosters.ownerId': sleeperId }).lean();
+    if (!leagues.length) {
+      const currentYear = String(new Date().getFullYear());
+      const sleeperLeagues = await sleeperService.getUserLeagues(sleeperId, 'nfl', currentYear).catch(() => []);
+      leagues = sleeperLeagues.map((sl) => ({
+        sleeperId: sl.league_id,
+        name: sl.name,
+        draftId: sl.draft_id,
+        totalRosters: sl.total_rosters,
+        rosters: null,
+      }));
+    }
     const activeDrafts = [];
 
     for (const league of leagues) {
@@ -269,13 +284,30 @@ router.get('/active', requireAuth, async (req, res) => {
       if ((league.totalRosters || 0) >= 32) continue;
       try {
         const draftData = await sleeperService.getDraft(league.draftId);
-        if (draftData.status !== 'drafting') continue;
+
+        if (!isLiveDraftStatus(draftData.status)) continue;
+
+        // Ensure roster ownership metadata is present when league came from Sleeper fallback.
+        let leagueRosters = Array.isArray(league.rosters) ? league.rosters : null;
+        if (!leagueRosters || leagueRosters.length === 0) {
+          const [rawRosters, users] = await Promise.all([
+            sleeperService.getRosters(league.sleeperId),
+            sleeperService.buildUserMap(league.sleeperId),
+          ]);
+          leagueRosters = (rawRosters || []).map((r) => ({
+            rosterId: r.roster_id,
+            ownerId: r.owner_id,
+            ownerUsername: users[r.owner_id]?.username || 'Unknown',
+            playerIds: r.players || [],
+            taxiPlayerIds: r.taxi || [],
+          }));
+        }
 
         const [picks, tradedPicks] = await Promise.all([
           sleeperService.getDraftPicks(league.draftId),
           sleeperService.getTradedPicks(league.draftId).catch(() => []),
         ]);
-        const myRoster = league.rosters.find(r => r.ownerId === sleeperId);
+        const myRoster = leagueRosters.find(r => r.ownerId === sleeperId);
         const myPickSlot = draftData.draft_order?.[sleeperId];
 
         // Compute next pick for the user
@@ -286,8 +318,8 @@ router.get('/active', requireAuth, async (req, res) => {
         const currentSlot  = (picksMade % totalRosters) + 1;
 
         // Build roster_id <-> userId maps so we can apply traded picks
-        const rosterIdByOwner = Object.fromEntries((league.rosters || []).map(r => [r.ownerId, r.rosterId]));
-        const ownerByRosterId = Object.fromEntries((league.rosters || []).map(r => [r.rosterId, r.ownerId]));
+        const rosterIdByOwner = Object.fromEntries((leagueRosters || []).map(r => [r.ownerId, r.rosterId]));
+        const ownerByRosterId = Object.fromEntries((leagueRosters || []).map(r => [r.rosterId, r.ownerId]));
         const myRosterId = rosterIdByOwner[sleeperId];
 
         // For a given draft slot + round, return the userId who currently owns that pick
@@ -354,6 +386,7 @@ router.get('/active', requireAuth, async (req, res) => {
           rounds,
           myPickSlot,
           onTheClock,
+          rosters: leagueRosters,
         });
       } catch { /* skip unavailable drafts */ }
     }

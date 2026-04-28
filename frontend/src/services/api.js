@@ -18,8 +18,12 @@ export const logout = () => api.post('/auth/logout').then(r => r.data);
 export const getMe = () => api.get('/auth/me').then(r => r.data);
 
 // Leagues
-export const getLeagues = (year) => {
-  const params = year ? { year } : undefined;
+export const getLeagues = (year, options = {}) => {
+  const params = {
+    ...(year ? { year } : {}),
+    ...(options.includeRosters ? { includeRosters: 'true' } : {}),
+    ...(typeof options.activeOnly === 'boolean' ? { activeOnly: String(options.activeOnly) } : {}),
+  };
   return api.get('/leagues', { params, timeout: 60000 }).then(r => r.data);
 };
 export const getLeague = (id) => api.get(`/leagues/${id}`).then(r => r.data);

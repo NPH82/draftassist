@@ -258,7 +258,7 @@ router.get('/', requireAuth, async (req, res) => {
     const { sleeperId } = req.user;
     const year = (req.query.year || '').toString().trim();
     const activeOnly = String(req.query.activeOnly || 'true').toLowerCase() !== 'false';
-    const includeRosters = String(req.query.includeRosters || 'false').toLowerCase() === 'true';
+    const includeRostersRequested = String(req.query.includeRosters || 'false').toLowerCase() === 'true';
 
     // Fetch fresh from Sleeper.
     // If year is not provided, scan recent seasons so users don't see an empty
@@ -282,6 +282,10 @@ router.get('/', requireAuth, async (req, res) => {
     if (activeOnly) {
       sleeperLeagues = sleeperLeagues.filter((league) => isActiveLeagueStatus(league?.status));
     }
+
+    // For managers with a smaller number of leagues, return full roster detail
+    // automatically so league cards can show complete roster context.
+    const includeRosters = includeRostersRequested || sleeperLeagues.length <= 24;
 
     // Build player map for win window calculations.
     // Primary: our DB (has DAS scores, KTC/FP values, etc.), keyed by sleeperId.
