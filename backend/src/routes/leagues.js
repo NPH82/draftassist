@@ -835,15 +835,25 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
     // Build available pool: all devy players in our DB NOT on any roster in this league
     const availablePool = devyDbPlayers
-      .filter(p => p.sleeperId && !devyRosteredIds.has(p.sleeperId))
+      .filter(p => {
+        // Exclude players currently rostered in this league (by sleeperId or name)
+        if (p.sleeperId && devyRosteredIds.has(p.sleeperId)) return false;
+        if (rosteredNames.has(normalizeName(p.name))) return false;
+        return true;
+      })
       .map(p => {
-        const sp = sleeperPlayerMap[p.sleeperId] || {};
-        // Require an authoritative Sleeper match for available devy options.
-        if (!Object.keys(sp).length) return null;
-        // Only include active devy-eligible Sleeper profiles.
-        if (!isSleeperDevyPlayer(sp)) return null;
+        const sp = p.sleeperId ? (sleeperPlayerMap[p.sleeperId] || {}) : {};
+        const hasSleeperRecord = p.sleeperId && Object.keys(sp).length > 0;
+
+        // For Sleeper-sourced records: validate they're still devy-eligible.
+        // For scraper-sourced records (no sleeperId): trust the source data.
+        if (hasSleeperRecord && !isSleeperDevyPlayer(sp)) return null;
+
+        // Skip if Sleeper says this player now has an NFL team (graduated)
+        if (hasSleeperRecord && sp.team) return null;
+
         return {
-          sleeperId: p.sleeperId,
+          sleeperId: p.sleeperId || null,
           name: p.name,
           position: p.position,
           college: p.college || sp.college || null,

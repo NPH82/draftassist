@@ -347,6 +347,20 @@ router.post('/import-devy-players', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/admin/devy-players
+// Returns all isDevy=true records — useful for auditing what was seeded.
+router.get('/devy-players', requireAuth, async (req, res) => {
+  try {
+    const players = await Player.find({ isDevy: true })
+      .select('name position college devyClass devyKtcValue sleeperId dataSource bigBoardRank')
+      .sort({ devyKtcValue: -1 })
+      .lean();
+    res.json({ count: players.length, players });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/fix-devy-flags
 // Compares every isDevy=true DB record against the live Sleeper player map and strips isDevy
 // from any player Sleeper no longer considers a devy prospect (retired, active NFL vet, etc.).
