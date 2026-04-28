@@ -97,6 +97,12 @@ function isRookieDraftContext(draftData = {}, league = {}) {
   return /rookie|devy/.test(text);
 }
 
+function isActiveLeagueStatus(status) {
+  const normalized = String(status || '').toLowerCase();
+  // Sleeper league statuses are typically: pre_draft, drafting, in_season, complete.
+  return normalized === 'pre_draft' || normalized === 'drafting' || normalized === 'in_season';
+}
+
 async function resolveDraftClassYear({ requestedYear, draftData, league }) {
   const currentYear = new Date().getFullYear();
   const explicit = toInt(requestedYear);
@@ -234,6 +240,7 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const { sleeperId } = req.user;
     const year = (req.query.year || '').toString().trim();
+    const activeOnly = String(req.query.activeOnly || 'true').toLowerCase() !== 'false';
 
     // Fetch fresh from Sleeper.
     // If year is not provided, scan recent seasons so users don't see an empty
@@ -252,6 +259,10 @@ router.get('/', requireAuth, async (req, res) => {
         if (league?.league_id && !byId.has(league.league_id)) byId.set(league.league_id, league);
       }
       sleeperLeagues = [...byId.values()];
+    }
+
+    if (activeOnly) {
+      sleeperLeagues = sleeperLeagues.filter((league) => isActiveLeagueStatus(league?.status));
     }
 
     // Build player map for win window calculations.
