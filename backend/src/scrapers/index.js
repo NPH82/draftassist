@@ -158,6 +158,15 @@ function devyNorm(name) {
     .trim();
 }
 
+function sanitizeDevyName(name) {
+  return String(name || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    // Remove trailing trend artifacts like "+754" / "-120"
+    .replace(/\s+[+-]\d+\s*$/g, '')
+    .trim();
+}
+
 /**
  * Refresh devy (college prospect) rankings from three sources:
  *   1. KeepTradeCut API  — primary: fantasy values, draft-class year
@@ -170,6 +179,17 @@ function devyNorm(name) {
  */
 async function refreshDevyRankings() {
   const devyYear = new Date().getFullYear() + 1; // default to next draft class (2027)
+
+  // Clean malformed names created by older HTML parsing logic.
+  const possiblyNoisy = await Player.find({ isDevy: true, dataSource: 'devy-scrape' })
+    .select('_id name')
+    .lean();
+  for (const p of possiblyNoisy) {
+    const cleaned = sanitizeDevyName(p.name);
+    if (cleaned && cleaned !== p.name) {
+      await Player.updateOne({ _id: p._id }, { $set: { name: cleaned } }).catch(() => {});
+    }
+  }
 
   // Fetch all sources in parallel; failures are non-fatal
   const [ktcResult, nflmdbResult, fpResult] = await Promise.all([
@@ -200,11 +220,13 @@ async function refreshDevyRankings() {
   for (const p of (ktcResult.data || [])) {
     if (!p.name || !DEVY_SKILL_POSITIONS.has(p.position)) continue;
 
-    const key = devyNorm(p.name);
+    const cleanName = sanitizeDevyName(p.name);
+
+    const key = devyNorm(cleanName);
     const nflmdb = nflmdbMap[key] || {};
     const fp = fpMap[key] || {};
 
-    const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existing = await Player.findOne({
       name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
     }).lean();
@@ -219,6 +241,8 @@ async function refreshDevyRankings() {
         continue;
       }
       const setFields = {
+        name: cleanName,
+        position: p.position,
         devyKtcValue: p.value,
         isDevy: true,
         isRookie: false,
@@ -234,7 +258,7 @@ async function refreshDevyRankings() {
       // Brand-new devy prospect — create record
       try {
         await Player.create({
-          name: p.name,
+          name: cleanName,
           position: p.position,
           team: null,
           college: college || null,
@@ -259,9 +283,11 @@ async function refreshDevyRankings() {
   for (const p of (nflmdbResult.data || [])) {
     if (!p.name || !DEVY_SKILL_POSITIONS.has(p.position)) continue;
 
-    const key = devyNorm(p.name);
+    const cleanName = sanitizeDevyName(p.name);
+
+    const key = devyNorm(cleanName);
     const fp = fpMap[key] || {};
-    const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existing = await Player.findOne({
       name: { $regex: new RegExp(`^${escapedName}$`, 'i') },
     }).lean();
@@ -273,6 +299,8 @@ async function refreshDevyRankings() {
         { _id: existing._id },
         {
           $set: {
+            name: cleanName,
+            position: p.position,
             isDevy: true,
             bigBoardRank: p.bigBoardRank,
             ...(p.college   ? { college: p.college }     : {}),
@@ -288,7 +316,7 @@ async function refreshDevyRankings() {
       // KTC failed or didn't have this player — create from NFLMDB
       try {
         await Player.create({
-          name: p.name,
+          name: cleanName,
           position: p.position,
           team: null,
           college: p.college || null,
