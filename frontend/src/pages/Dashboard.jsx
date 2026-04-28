@@ -11,7 +11,7 @@ import DevyPool from '../components/DevyPool/DevyPool';
 import { formatEta, timeAgo } from '../utils/formatting';
 
 export default function Dashboard() {
-  const { user, leagues } = useApp();
+  const { user, leagues, loadingLeagues } = useApp();
   const navigate = useNavigate();
   const [activeDrafts, setActiveDrafts] = useState([]);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
@@ -183,7 +183,11 @@ export default function Dashboard() {
         {/* My Leagues */}
         <section>
           <h2 className="font-semibold" style={{ marginBottom: '0.75rem' }}>My Leagues</h2>
-          {leagues.length === 0 ? (
+          {loadingLeagues ? (
+            <div className="card text-secondary text-sm" style={{ textAlign: 'center', padding: '1.5rem' }}>
+              Gathering leagues...
+            </div>
+          ) : leagues.length === 0 ? (
             <div className="card text-secondary text-sm" style={{ textAlign: 'center', padding: '1.5rem' }}>
               No leagues found
             </div>

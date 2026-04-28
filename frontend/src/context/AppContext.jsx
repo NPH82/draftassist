@@ -7,12 +7,15 @@ export function AppProvider({ children }) {
   const [user, setUser] = useState(null);
   const [leagues, setLeagues] = useState([]);
   const [loadingUser, setLoadingUser] = useState(true);
+  const [loadingLeagues, setLoadingLeagues] = useState(false);
   const [error, setError] = useState(null);
 
   // Restore session on mount
   useEffect(() => {
     const token = localStorage.getItem('authToken');
     if (!token) { setLoadingUser(false); return; }
+
+    setLoadingLeagues(true);
 
     getMe()
       .then(async (u) => {
@@ -28,15 +31,27 @@ export function AppProvider({ children }) {
         }
       })
       .catch(() => { localStorage.removeItem('authToken'); })
-      .finally(() => setLoadingUser(false));
+      .finally(() => {
+        setLoadingUser(false);
+        setLoadingLeagues(false);
+      });
   }, []);
 
   const login = useCallback(async (username) => {
+    setLoadingLeagues(true);
     const data = await apiLogin(username);
     localStorage.setItem('authToken', data.token);
     setUser(data.user);
-    const lg = await getLeagues();
-    setLeagues(lg.leagues || []);
+    try {
+      const lg = await getLeagues();
+      setLeagues(lg.leagues || []);
+      setError(null);
+    } catch {
+      setLeagues([]);
+      setError('Could not load leagues right now. Pull to refresh in a moment.');
+    } finally {
+      setLoadingLeagues(false);
+    }
     return data;
   }, []);
 
@@ -45,15 +60,25 @@ export function AppProvider({ children }) {
     localStorage.removeItem('authToken');
     setUser(null);
     setLeagues([]);
+    setLoadingLeagues(false);
   }, []);
 
   const refreshLeagues = useCallback(async () => {
-    const data = await getLeagues();
-    setLeagues(data.leagues || []);
+    setLoadingLeagues(true);
+    try {
+      const data = await getLeagues();
+      setLeagues(data.leagues || []);
+      setError(null);
+    } catch {
+      setLeagues([]);
+      setError('Could not load leagues right now. Pull to refresh in a moment.');
+    } finally {
+      setLoadingLeagues(false);
+    }
   }, []);
 
   return (
-    <AppContext.Provider value={{ user, leagues, loadingUser, error, login, logout, refreshLeagues }}>
+    <AppContext.Provider value={{ user, leagues, loadingUser, loadingLeagues, error, login, logout, refreshLeagues }}>
       {children}
     </AppContext.Provider>
   );
