@@ -160,15 +160,42 @@ function parseDevyCandidateFragment(fragment) {
     .replace(/^[-:;,\s]+|[-:;,\s]+$/g, '');
   if (!raw) return null;
 
+  // Handle structured note formats such as:
+  // - Air Noland, QB, South Carolina
+  // - Devin Brown-QB-OSu
+  const normalizedStructured = raw.replace(/\s*-\s*/g, ', ');
+  const structuredParts = normalizedStructured
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (structuredParts.length >= 2) {
+    const posIdx = structuredParts.findIndex((part) => NOTE_POSITION_TOKENS.has(part.toUpperCase()));
+    if (posIdx >= 0) {
+      const positionHint = structuredParts[posIdx].toUpperCase();
+      const before = posIdx > 0 ? structuredParts[posIdx - 1] : null;
+      const after = posIdx < structuredParts.length - 1 ? structuredParts[posIdx + 1] : null;
+      const nameCandidate = [before, after]
+        .find((part) => part && !NOTE_POSITION_TOKENS.has(part.toUpperCase()));
+
+      if (nameCandidate) {
+        return { name: nameCandidate, positionHint };
+      }
+    }
+  }
+
   const tokens = raw.split(' ').filter(Boolean);
   if (!tokens.length) return null;
 
   let positionHint = null;
   let nameTokens = tokens;
-  const posIdx = tokens.findIndex((token, idx) => idx > 0 && NOTE_POSITION_TOKENS.has(token.toUpperCase()));
+  const posIdx = tokens.findIndex((token) => NOTE_POSITION_TOKENS.has(token.toUpperCase()));
   if (posIdx >= 0) {
     positionHint = tokens[posIdx].toUpperCase();
-    if (posIdx >= 2) nameTokens = tokens.slice(0, posIdx);
+    if (posIdx === 0 && tokens.length >= 2) {
+      nameTokens = tokens.slice(1);
+    } else if (posIdx >= 2) {
+      nameTokens = tokens.slice(0, posIdx);
+    }
   }
 
   const name = nameTokens.join(' ').replace(/^['\"]|['\"]$/g, '').trim();
@@ -187,7 +214,7 @@ function extractDevyCandidatesFromAlias(rawAlias) {
 
   for (const source of sources) {
     const parts = source
-      .split(/,|;|\+|\/|\band\b/gi)
+      .split(/;|\+|\/|\band\b/gi)
       .map((part) => part.trim())
       .filter(Boolean);
 
