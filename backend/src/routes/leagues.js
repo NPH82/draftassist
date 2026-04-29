@@ -612,7 +612,7 @@ router.post('/:leagueId/preferences', requireAuth, async (req, res) => {
     const updated = await League.findOneAndUpdate(
       { sleeperId: leagueId },
       { $set: { ...updates, lastUpdated: new Date() } },
-      { new: true }
+      { returnDocument: 'after' }
     ).lean();
 
     res.json({
@@ -955,37 +955,39 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const positionFilters = getLeaguePositionFilters({ devyEnabled, idpEnabled });
     const positionAllowed = (position) => allowsDevyPoolPosition(position, { devyEnabled, idpEnabled });
 
-    // Fetch Sleeper player map so we can identify devy players by years_exp
+    // Fetch Sleeper data in parallel to minimize response latency. League users
+    // and rosters are now short-TTL cached in sleeperService to reduce load.
     let sleeperPlayerMap = {};
-    try {
-      sleeperPlayerMap = await sleeperService.getAllPlayers('nfl');
-    } catch (e) {
-      console.warn('[DevyPool] Sleeper player map unavailable:', e.message);
-    }
-
-    // Pull user metadata so we can honor player-level notes/nicknames.
-    // Sleeper stores player notes both on the user object AND on the roster object.
-    // We fetch both and merge into aliasByPlayerId.
     let userMetaById = {};
-    try {
-      const users = await sleeperService.getLeagueUsers(leagueId);
-      userMetaById = Object.fromEntries((users || []).map(u => [u.user_id, u.metadata || {}]));
-    } catch (e) {
-      console.warn('[DevyPool] League user metadata unavailable:', e.message);
+    let sleeperRosterMetaByOwnerId = {};
+    const [playersRes, usersRes, rostersRes] = await Promise.allSettled([
+      sleeperService.getAllPlayers('nfl'),
+      sleeperService.getLeagueUsers(leagueId),
+      sleeperService.getRosters(leagueId),
+    ]);
+
+    if (playersRes.status === 'fulfilled') {
+      sleeperPlayerMap = playersRes.value || {};
+    } else {
+      console.warn('[DevyPool] Sleeper player map unavailable:', playersRes.reason?.message || playersRes.reason);
     }
 
-    // Also fetch live roster metadata from Sleeper — this is where player nicknames/notes
-    // are actually stored in most devy leagues (roster.metadata.player_nicknames or similar).
-    let sleeperRosterMetaByOwnerId = {};
-    try {
-      const liveRosters = await sleeperService.getRosters(leagueId);
-      for (const r of (liveRosters || [])) {
+    if (usersRes.status === 'fulfilled') {
+      const users = usersRes.value || [];
+      userMetaById = Object.fromEntries(users.map(u => [u.user_id, u.metadata || {}]));
+    } else {
+      console.warn('[DevyPool] League user metadata unavailable:', usersRes.reason?.message || usersRes.reason);
+    }
+
+    if (rostersRes.status === 'fulfilled') {
+      const liveRosters = rostersRes.value || [];
+      for (const r of liveRosters) {
         if (r.owner_id && r.metadata) {
           sleeperRosterMetaByOwnerId[r.owner_id] = r.metadata;
         }
       }
-    } catch (e) {
-      console.warn('[DevyPool] Live roster metadata unavailable:', e.message);
+    } else {
+      console.warn('[DevyPool] Live roster metadata unavailable:', rostersRes.reason?.message || rostersRes.reason);
     }
 
     const aliasByPlayerId = new Map(); // playerId -> [alias1, alias2, ...]
@@ -1088,20 +1090,6 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       }
     }
 
-    // --- DIAGNOSTIC LOGGING (temporary) ---
-    console.log(`[DevyPool] league=${leagueId} devyEnabled=${devyEnabled} idpEnabled=${idpEnabled}`);
-    console.log(`[DevyPool] rosters=${(league.rosters || []).length} allRosterIds=${allRosterIds.size} aliasByPlayerId=${aliasByPlayerId.size} noteDerived=${noteDerivedDevyEntries.length}`);
-    for (const [pid, aliases] of aliasByPlayerId.entries()) {
-      console.log(`[DevyPool] alias playerId=${pid}:`, aliases);
-    }
-    for (const entry of noteDerivedDevyEntries) {
-      console.log(`[DevyPool] noteDerived:`, entry.candidateName, entry.positionHint, '<-', entry.associatedPlayerName);
-    }
-    for (const [id, owner] of Object.entries(idToRoster)) {
-      if (owner.devyAlias) console.log(`[DevyPool] idToRoster id=${id} alias="${owner.devyAlias}" posHint="${owner.devyPositionHint}"`);
-    }
-    // --- END DIAGNOSTIC ---
-
     // Identify which roster IDs are devy players (years_exp === -1 in Sleeper)
     // Also track players who were devy but just got drafted to an NFL team ("graduated")
     const devyRosteredIds = new Set();
@@ -1124,8 +1112,6 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         graduatedIds.add(id);
       }
     }
-    console.log(`[DevyPool] devyRosteredIds=${devyRosteredIds.size}:`, [...devyRosteredIds].slice(0, 20));
-
     // Load devy players from our DB
     const devyDbPlayers = await Player.find({ isDevy: true })
       .select('sleeperId name position college devyClass devyKtcValue devyKtcRank ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age sheetRank sheetRating sheetAvgOvrRank')
@@ -1326,8 +1312,6 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         inOurDb: !!matchedDb,
       });
     }
-
-    console.log(`[DevyPool] rosterList=${rosterList.length} rosteredDevyNames=${rosteredDevyNames.size}:`, [...rosteredDevyNames].slice(0, 20));
 
     // Build graduated list — devy players who are now on NFL rosters
     const graduatedList = [];

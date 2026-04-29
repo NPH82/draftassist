@@ -8,6 +8,44 @@ const http = axios.create({
   headers: { 'Accept': 'application/json' },
 });
 
+// Short-lived per-league caches to reduce duplicate upstream requests.
+const LEAGUE_USERS_TTL_MS = 60 * 1000; // 60s
+const LEAGUE_ROSTERS_TTL_MS = 45 * 1000; // 45s
+const _leagueUsersCache = new Map(); // key -> { value, at }
+const _leagueRostersCache = new Map(); // key -> { value, at }
+const _leagueUsersInFlight = new Map(); // key -> Promise
+const _leagueRostersInFlight = new Map(); // key -> Promise
+
+function getCachedValue(cache, key, ttlMs) {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if ((Date.now() - hit.at) > ttlMs) {
+    cache.delete(key);
+    return null;
+  }
+  return hit.value;
+}
+
+async function getOrLoadWithDedup({ cache, inFlight, key, ttlMs, loader }) {
+  const cached = getCachedValue(cache, key, ttlMs);
+  if (cached) return cached;
+
+  if (inFlight.has(key)) return inFlight.get(key);
+
+  const promise = (async () => {
+    try {
+      const value = await loader();
+      cache.set(key, { value, at: Date.now() });
+      return value;
+    } finally {
+      inFlight.delete(key);
+    }
+  })();
+
+  inFlight.set(key, promise);
+  return promise;
+}
+
 // ── User ──────────────────────────────────────────────────────────────────────
 
 async function getUser(username) {
@@ -30,13 +68,31 @@ async function getLeague(leagueId) {
 // ── Rosters ───────────────────────────────────────────────────────────────────
 
 async function getRosters(leagueId) {
-  const { data } = await http.get(`/league/${leagueId}/rosters`);
-  return data;  // array of roster objects
+  const key = String(leagueId);
+  return getOrLoadWithDedup({
+    cache: _leagueRostersCache,
+    inFlight: _leagueRostersInFlight,
+    key,
+    ttlMs: LEAGUE_ROSTERS_TTL_MS,
+    loader: async () => {
+      const { data } = await http.get(`/league/${leagueId}/rosters`);
+      return data; // array of roster objects
+    },
+  });
 }
 
 async function getLeagueUsers(leagueId) {
-  const { data } = await http.get(`/league/${leagueId}/users`);
-  return data;  // array of user objects with display names
+  const key = String(leagueId);
+  return getOrLoadWithDedup({
+    cache: _leagueUsersCache,
+    inFlight: _leagueUsersInFlight,
+    key,
+    ttlMs: LEAGUE_USERS_TTL_MS,
+    loader: async () => {
+      const { data } = await http.get(`/league/${leagueId}/users`);
+      return data; // array of user objects with display names
+    },
+  });
 }
 
 // ── Drafts ────────────────────────────────────────────────────────────────────
