@@ -963,8 +963,9 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       console.warn('[DevyPool] Sleeper player map unavailable:', e.message);
     }
 
-    // Pull user metadata so we can honor player-level notes/nicknames used by
-    // many devy leagues to store the real devy prospect attached to an NFL ID.
+    // Pull user metadata so we can honor player-level notes/nicknames.
+    // Sleeper stores player notes both on the user object AND on the roster object.
+    // We fetch both and merge into aliasByPlayerId.
     let userMetaById = {};
     try {
       const users = await sleeperService.getLeagueUsers(leagueId);
@@ -973,18 +974,37 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       console.warn('[DevyPool] League user metadata unavailable:', e.message);
     }
 
+    // Also fetch live roster metadata from Sleeper — this is where player nicknames/notes
+    // are actually stored in most devy leagues (roster.metadata.player_nicknames or similar).
+    let sleeperRosterMetaByOwnerId = {};
+    try {
+      const liveRosters = await sleeperService.getRosters(leagueId);
+      for (const r of (liveRosters || [])) {
+        if (r.owner_id && r.metadata) {
+          sleeperRosterMetaByOwnerId[r.owner_id] = r.metadata;
+        }
+      }
+    } catch (e) {
+      console.warn('[DevyPool] Live roster metadata unavailable:', e.message);
+    }
+
     const aliasByPlayerId = new Map(); // playerId -> [alias1, alias2, ...]
-    for (const metadata of Object.values(userMetaById)) {
+    const pushAliasesFromMeta = (metadata) => {
       const maps = getAliasMapsFromMetadata(metadata || {});
       for (const map of maps) {
         for (const [playerId, raw] of Object.entries(map)) {
           const alias = String(raw || '').trim();
           if (!playerId || !alias) continue;
           if (!aliasByPlayerId.has(playerId)) aliasByPlayerId.set(playerId, []);
-          aliasByPlayerId.get(playerId).push(alias);
+          // Avoid exact duplicates
+          if (!aliasByPlayerId.get(playerId).includes(alias)) {
+            aliasByPlayerId.get(playerId).push(alias);
+          }
         }
       }
-    }
+    };
+    for (const metadata of Object.values(userMetaById)) pushAliasesFromMeta(metadata);
+    for (const metadata of Object.values(sleeperRosterMetaByOwnerId)) pushAliasesFromMeta(metadata);
 
     // Collect every player ID across all rosters (active + taxi).
     // Also parse commissioner-managed player notes to discover attached devy prospects
@@ -996,7 +1016,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     for (const roster of league.rosters || []) {
       const active = roster.playerIds || [];
       const taxi = roster.taxiPlayerIds || [];
-      const ownerMeta = userMetaById[roster.ownerId] || {};
+      // Merge user metadata with live roster metadata for this owner
+      const ownerMeta = { ...(userMetaById[roster.ownerId] || {}), ...(sleeperRosterMetaByOwnerId[roster.ownerId] || {}) };
       const pushRosterId = (id, onTaxi) => {
         allRosterIds.add(id);
         const sp = sleeperPlayerMap[id] || {};
