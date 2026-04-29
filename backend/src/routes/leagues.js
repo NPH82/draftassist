@@ -20,12 +20,12 @@ const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const DevyOwnershipSnapshot = require('../models/DevyOwnershipSnapshot');
+const { extractDevyCandidatesFromAlias } = require('../utils/devyNoteParser');
 
 const KTC_TO_FP = 68 / 9500;
 const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
 const IDP_POSITIONS = new Set(['LB', 'LB/ED', 'DE', 'DE/ED', 'DL', 'DL/ED', 'DT', 'CB', 'S']);
 const POSITION_FILTER_ORDER = ['QB', 'RB', 'WR', 'TE', 'LB', 'LB/ED', 'DE', 'DE/ED', 'DL', 'DL/ED', 'DT', 'CB', 'S'];
-const NOTE_POSITION_TOKENS = new Set(['QB', 'RB', 'WR', 'TE', 'LB', 'DL', 'DE', 'DT', 'CB', 'S', 'DB', 'EDGE', 'ED']);
 
 function fpEquivalentValue(player = {}, isDevy = false) {
   const fp = Number(player.fantasyProsValue || 0);
@@ -151,84 +151,6 @@ function getPlayerAliasFromMetadata(metadata = {}, playerId) {
   }
 
   return null;
-}
-
-function parseDevyCandidateFragment(fragment) {
-  const raw = String(fragment || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^[-:;,\s]+|[-:;,\s]+$/g, '');
-  if (!raw) return null;
-
-  // Handle structured note formats such as:
-  // - Air Noland, QB, South Carolina
-  // - Devin Brown-QB-OSu
-  const normalizedStructured = raw.replace(/\s*-\s*/g, ', ');
-  const structuredParts = normalizedStructured
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (structuredParts.length >= 2) {
-    const posIdx = structuredParts.findIndex((part) => NOTE_POSITION_TOKENS.has(part.toUpperCase()));
-    if (posIdx >= 0) {
-      const positionHint = structuredParts[posIdx].toUpperCase();
-      const before = posIdx > 0 ? structuredParts[posIdx - 1] : null;
-      const after = posIdx < structuredParts.length - 1 ? structuredParts[posIdx + 1] : null;
-      const nameCandidate = [before, after]
-        .find((part) => part && !NOTE_POSITION_TOKENS.has(part.toUpperCase()));
-
-      if (nameCandidate) {
-        return { name: nameCandidate, positionHint };
-      }
-    }
-  }
-
-  const tokens = raw.split(' ').filter(Boolean);
-  if (!tokens.length) return null;
-
-  let positionHint = null;
-  let nameTokens = tokens;
-  const posIdx = tokens.findIndex((token) => NOTE_POSITION_TOKENS.has(token.toUpperCase()));
-  if (posIdx >= 0) {
-    positionHint = tokens[posIdx].toUpperCase();
-    if (posIdx === 0 && tokens.length >= 2) {
-      nameTokens = tokens.slice(1);
-    } else if (posIdx >= 2) {
-      nameTokens = tokens.slice(0, posIdx);
-    }
-  }
-
-  const name = nameTokens.join(' ').replace(/^['\"]|['\"]$/g, '').trim();
-  if (!name) return null;
-  return { name, positionHint };
-}
-
-function extractDevyCandidatesFromAlias(rawAlias) {
-  const text = String(rawAlias || '').trim();
-  if (!text) return [];
-
-  const parenMatches = [...text.matchAll(/\(([^)]+)\)/g)].map((m) => m[1]);
-  const sources = parenMatches.length > 0 ? parenMatches : [text];
-  const out = [];
-  const seen = new Set();
-
-  for (const source of sources) {
-    const parts = source
-      .split(/;|\+|\/|\band\b/gi)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    for (const part of parts) {
-      const parsed = parseDevyCandidateFragment(part);
-      if (!parsed) continue;
-      const key = normalizeName(parsed.name);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      out.push(parsed);
-    }
-  }
-
-  return out;
 }
 
 function toInt(value) {
@@ -1301,6 +1223,9 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const matchedDb = resolveDevyByName(noteEntry.candidateName);
       const candidateNorm = normalizeName(noteEntry.candidateName);
       const cached = cachedSnapshotByName.get(candidateNorm);
+      // Ignore generic notes/slogans unless they map to a known devy player
+      // or provide a usable position hint.
+      if (!matchedDb && !cached && !noteEntry.positionHint) continue;
       const matchedSleeper = matchedDb?.sleeperId ? (sleeperPlayerMap[matchedDb.sleeperId] || {}) : {};
       const resolvedName = matchedDb?.name || cached?.devyName || noteEntry.candidateName;
       const position = matchedDb?.position || cached?.position || matchedSleeper.position || noteEntry.positionHint || '?';
