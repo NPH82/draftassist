@@ -176,3 +176,7 @@ GET /api/draft/:draftId?classYear=2026
 ```
 
 If position need tags feel stale, refresh league cache by reloading the Dashboard (`/api/leagues` recomputes needs from current roster, SuperFlex, and TE premium scoring context).
+
+**Devy Drafted tab missing prospects from League Notes**: Devy pool now parses commissioner-managed player notes/nicknames for parenthetical prospects (for example, `Elliott Fry (Ahmad Hardy RB Missouri)`) and cross-references all leaguemate rosters. If names still do not appear under Drafted Devy, confirm the note is attached to a rostered player and includes the devy name in parentheses.
+
+The backend also persists discovered drafted devy mappings into `DevyOwnershipSnapshot` (manager + team + league scoped). This cache is reused by future devy-pool calls to speed up cross-league note resolution for all users.

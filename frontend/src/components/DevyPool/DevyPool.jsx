@@ -60,7 +60,9 @@ function DevyPlayerRow({ player, showOwner }) {
             </span>
           )}
           {showOwner && player.ownerUsername && (
-            <span style={{ color: 'var(--yellow)', marginLeft: '0.4rem' }}>→ {player.ownerUsername}</span>
+            <span style={{ color: 'var(--yellow)', marginLeft: '0.4rem' }}>
+              → {player.ownerUsername}{player.ownerTeamName ? ` (${player.ownerTeamName})` : ''}
+            </span>
           )}
           {!player.inOurDb && (
             <span style={{ color: 'var(--red, #ef4444)', marginLeft: '0.4rem' }}>⚠ not in DB</span>
@@ -228,6 +230,11 @@ export default function DevyPool({ leagueId }) {
     graduated: `Drafted to NFL (${graduated.length})`,
     compare: `Board Compare (${compareMode === 'position' && posFilter === 'ALL' ? groupedRowCount : comparisonRows.length})`,
   }[key]);
+
+  const devyRowKey = (player, idx) => (
+    player.sleeperId
+      || `${player.ownerId || 'na'}-${player.associatedPlayerName || player.name}-${idx}`
+  );
 
   return (
     <div>
@@ -430,7 +437,7 @@ export default function DevyPool({ leagueId }) {
           {rostered.length === 0 ? (
             <div className="text-xs text-muted" style={{ padding: '0.5rem 0' }}>No rostered devy players found.</div>
           ) : (
-            rostered.map(p => <DevyPlayerRow key={p.sleeperId} player={p} showOwner={true} />)
+            rostered.map((p, idx) => <DevyPlayerRow key={devyRowKey(p, idx)} player={p} showOwner={true} />)
           )}
           {unknown.length > 0 && (
             <div style={{ marginTop: '0.5rem' }}>
@@ -441,8 +448,8 @@ export default function DevyPool({ leagueId }) {
               >
                 {showUnknown ? '▴' : '▾'} {unknown.length} rostered devy player{unknown.length !== 1 ? 's' : ''} not yet in DB
               </button>
-              {showUnknown && unknown.map(p => (
-                <DevyPlayerRow key={p.sleeperId} player={p} showOwner={true} />
+              {showUnknown && unknown.map((p, idx) => (
+                <DevyPlayerRow key={devyRowKey(p, idx)} player={p} showOwner={true} />
               ))}
             </div>
           )}

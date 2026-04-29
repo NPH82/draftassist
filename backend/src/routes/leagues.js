@@ -19,11 +19,13 @@ const { calcPersonalRankScore } = require('../services/scoringEngine');
 const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
+const DevyOwnershipSnapshot = require('../models/DevyOwnershipSnapshot');
 
 const KTC_TO_FP = 68 / 9500;
 const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
 const IDP_POSITIONS = new Set(['LB', 'LB/ED', 'DE', 'DE/ED', 'DL', 'DL/ED', 'DT', 'CB', 'S']);
 const POSITION_FILTER_ORDER = ['QB', 'RB', 'WR', 'TE', 'LB', 'LB/ED', 'DE', 'DE/ED', 'DL', 'DL/ED', 'DT', 'CB', 'S'];
+const NOTE_POSITION_TOKENS = new Set(['QB', 'RB', 'WR', 'TE', 'LB', 'DL', 'DE', 'DT', 'CB', 'S', 'DB', 'EDGE', 'ED']);
 
 function fpEquivalentValue(player = {}, isDevy = false) {
   const fp = Number(player.fantasyProsValue || 0);
@@ -80,6 +82,57 @@ function getPlayerAliasFromMetadata(metadata = {}, playerId) {
   }
 
   return null;
+}
+
+function parseDevyCandidateFragment(fragment) {
+  const raw = String(fragment || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[-:;,\s]+|[-:;,\s]+$/g, '');
+  if (!raw) return null;
+
+  const tokens = raw.split(' ').filter(Boolean);
+  if (!tokens.length) return null;
+
+  let positionHint = null;
+  let nameTokens = tokens;
+  const posIdx = tokens.findIndex((token, idx) => idx > 0 && NOTE_POSITION_TOKENS.has(token.toUpperCase()));
+  if (posIdx >= 0) {
+    positionHint = tokens[posIdx].toUpperCase();
+    if (posIdx >= 2) nameTokens = tokens.slice(0, posIdx);
+  }
+
+  const name = nameTokens.join(' ').replace(/^['\"]|['\"]$/g, '').trim();
+  if (!name) return null;
+  return { name, positionHint };
+}
+
+function extractDevyCandidatesFromAlias(rawAlias) {
+  const text = String(rawAlias || '').trim();
+  if (!text) return [];
+
+  const parenMatches = [...text.matchAll(/\(([^)]+)\)/g)].map((m) => m[1]);
+  const sources = parenMatches.length > 0 ? parenMatches : [text];
+  const out = [];
+  const seen = new Set();
+
+  for (const source of sources) {
+    const parts = source
+      .split(/,|;|\+|\/|\band\b/gi)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (const part of parts) {
+      const parsed = parseDevyCandidateFragment(part);
+      if (!parsed) continue;
+      const key = normalizeName(parsed.name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(parsed);
+    }
+  }
+
+  return out;
 }
 
 function toInt(value) {
@@ -851,30 +904,64 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       console.warn('[DevyPool] League user metadata unavailable:', e.message);
     }
 
-    // Collect every player ID across all rosters (active + taxi)
+    // Collect every player ID across all rosters (active + taxi).
+    // Also parse commissioner-managed player notes to discover attached devy prospects
+    // stored as aliases (often inside parentheses).
     const allRosterIds = new Set();
     const idToRoster = {};  // sleeperId -> { ownerId, username, onTaxi }
+    const noteDerivedDevyEntries = [];
+    const seenNoteDerived = new Set();
     for (const roster of league.rosters || []) {
       const active = roster.playerIds || [];
       const taxi = roster.taxiPlayerIds || [];
       const ownerMeta = userMetaById[roster.ownerId] || {};
-      for (const id of active) {
+      const pushRosterId = (id, onTaxi) => {
         allRosterIds.add(id);
-        const alias = getPlayerAliasFromMetadata(ownerMeta, id);
+        const rawAlias = getPlayerAliasFromMetadata(ownerMeta, id);
+        const aliasCandidates = extractDevyCandidatesFromAlias(rawAlias);
+        const primaryAlias = aliasCandidates[0]?.name || (rawAlias ? String(rawAlias).trim() : null);
+
         if (!idToRoster[id]) {
-          idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: false, devyAlias: alias || null };
-        } else if (!idToRoster[id].devyAlias && alias) {
-          idToRoster[id].devyAlias = alias;
+          idToRoster[id] = {
+            ownerId: roster.ownerId,
+            username: roster.ownerUsername,
+            ownerTeamName: roster.ownerTeamName || null,
+            onTaxi: !!onTaxi,
+            devyAlias: primaryAlias || null,
+          };
+        } else {
+          if (!idToRoster[id].devyAlias && primaryAlias) idToRoster[id].devyAlias = primaryAlias;
+          if (!idToRoster[id].ownerTeamName && roster.ownerTeamName) idToRoster[id].ownerTeamName = roster.ownerTeamName;
         }
+
+        const associatedPlayer = sleeperPlayerMap[id] || {};
+        const associatedPlayerName = associatedPlayer.full_name
+          || `${associatedPlayer.first_name || ''} ${associatedPlayer.last_name || ''}`.trim()
+          || id;
+
+        for (const candidate of aliasCandidates) {
+          const key = `${roster.ownerId}:${id}:${normalizeName(candidate.name)}`;
+          if (seenNoteDerived.has(key)) continue;
+          seenNoteDerived.add(key);
+          noteDerivedDevyEntries.push({
+            associatedPlayerId: id,
+            associatedPlayerName,
+            ownerId: roster.ownerId,
+            ownerUsername: roster.ownerUsername,
+            ownerTeamName: roster.ownerTeamName || null,
+            onTaxi: !!onTaxi,
+            candidateName: candidate.name,
+            positionHint: candidate.positionHint || null,
+            rawAlias: rawAlias || null,
+          });
+        }
+      };
+
+      for (const id of active) {
+        pushRosterId(id, false);
       }
       for (const id of taxi) {
-        allRosterIds.add(id);
-        const alias = getPlayerAliasFromMetadata(ownerMeta, id);
-        if (!idToRoster[id]) {
-          idToRoster[id] = { ownerId: roster.ownerId, username: roster.ownerUsername, onTaxi: true, devyAlias: alias || null };
-        } else if (!idToRoster[id].devyAlias && alias) {
-          idToRoster[id].devyAlias = alias;
-        }
+        pushRosterId(id, true);
       }
     }
 
@@ -907,6 +994,76 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       .lean();
 
     const devyBySleeperID = Object.fromEntries(devyDbPlayers.map(p => [p.sleeperId, p]));
+    const devyById = new Map(devyDbPlayers.map((p) => [String(p._id), p]));
+    const devyByNormalizedName = new Map();
+    for (const player of devyDbPlayers) {
+      const key = normalizeName(player.name);
+      if (!key) continue;
+      if (!devyByNormalizedName.has(key)) devyByNormalizedName.set(key, []);
+      devyByNormalizedName.get(key).push(player);
+    }
+
+    const noteCandidateNames = [...new Set(
+      noteDerivedDevyEntries
+        .map((entry) => normalizeName(entry.candidateName))
+        .filter(Boolean)
+    )];
+    const recentSnapshotCutoff = new Date(Date.now() - (180 * 24 * 60 * 60 * 1000));
+    let cachedSnapshotByName = new Map();
+    if (noteCandidateNames.length > 0) {
+      try {
+        const cachedSnapshots = await DevyOwnershipSnapshot.find({
+          normalizedDevyName: { $in: noteCandidateNames },
+          lastSeenAt: { $gte: recentSnapshotCutoff },
+        })
+          .sort({ lastSeenAt: -1 })
+          .lean();
+        cachedSnapshotByName = new Map();
+        for (const snap of cachedSnapshots) {
+          if (!cachedSnapshotByName.has(snap.normalizedDevyName)) {
+            cachedSnapshotByName.set(snap.normalizedDevyName, snap);
+          }
+        }
+      } catch (e) {
+        console.warn('[DevyPool] Snapshot cache read unavailable:', e.message);
+      }
+    }
+
+    const resolveDevyByName = (candidateName) => {
+      const candidateNorm = normalizeName(candidateName);
+      if (!candidateNorm) return null;
+
+      const cached = cachedSnapshotByName.get(candidateNorm);
+      if (cached?.devyPlayerId && devyById.has(String(cached.devyPlayerId))) {
+        return devyById.get(String(cached.devyPlayerId));
+      }
+      if (cached?.devySleeperId && devyBySleeperID[cached.devySleeperId]) {
+        return devyBySleeperID[cached.devySleeperId];
+      }
+      if (cached?.devyName) {
+        const cachedNorm = normalizeName(cached.devyName);
+        const cachedExact = devyByNormalizedName.get(cachedNorm);
+        if (cachedExact && cachedExact.length) return cachedExact[0];
+      }
+
+      const exact = devyByNormalizedName.get(candidateNorm);
+      if (exact && exact.length) return exact[0];
+
+      let best = null;
+      let bestLen = 0;
+      for (const [nameNorm, players] of devyByNormalizedName.entries()) {
+        const contains = candidateNorm.startsWith(`${nameNorm} `)
+          || candidateNorm.includes(` ${nameNorm} `)
+          || nameNorm.startsWith(`${candidateNorm} `);
+        if (!contains) continue;
+        if (nameNorm.length > bestLen) {
+          best = players[0];
+          bestLen = nameNorm.length;
+        }
+      }
+
+      return best;
+    };
 
     // Name-based roster map helps when local DB sleeperIds are stale/incorrect.
     const rosteredNames = new Set(
@@ -938,7 +1095,9 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
       rosterList.push({
         sleeperId: id,
+        devyPlayerId: db?._id || null,
         name,
+        associatedPlayerId: id,
         associatedPlayerName: isAliasName ? officialName : null,
         fromPlayerNote: isAliasName,
         position,
@@ -956,8 +1115,59 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         sheetVsKtcDelta: (db?.sheetRank && db?.devyKtcRank) ? (db.devyKtcRank - db.sheetRank) : null,
         ownerId: owner.ownerId || null,
         ownerUsername: owner.username || null,
+        ownerTeamName: owner.ownerTeamName || null,
         onTaxi: !!owner.onTaxi,
         inOurDb: !!db,
+      });
+    }
+
+    const existingRosteredKeys = new Set(
+      rosterList.map((row) => `${row.ownerId || ''}:${row.sleeperId || row.associatedPlayerName || ''}:${normalizeName(row.name)}`)
+    );
+    const rosteredDevyNames = new Set(
+      rosterList.map((row) => normalizeName(row.name)).filter(Boolean)
+    );
+
+    for (const noteEntry of noteDerivedDevyEntries) {
+      const matchedDb = resolveDevyByName(noteEntry.candidateName);
+      const candidateNorm = normalizeName(noteEntry.candidateName);
+      const cached = cachedSnapshotByName.get(candidateNorm);
+      const matchedSleeper = matchedDb?.sleeperId ? (sleeperPlayerMap[matchedDb.sleeperId] || {}) : {};
+      const resolvedName = matchedDb?.name || cached?.devyName || noteEntry.candidateName;
+      const position = matchedDb?.position || cached?.position || matchedSleeper.position || noteEntry.positionHint || '?';
+      if (position !== '?' && !positionAllowed(position)) continue;
+
+      const dedupeKey = `${noteEntry.ownerId || ''}:${noteEntry.associatedPlayerId || ''}:${normalizeName(resolvedName)}`;
+      if (existingRosteredKeys.has(dedupeKey)) continue;
+      existingRosteredKeys.add(dedupeKey);
+      rosteredDevyNames.add(normalizeName(resolvedName));
+
+      rosterList.push({
+        sleeperId: matchedDb?.sleeperId || cached?.devySleeperId || null,
+        devyPlayerId: matchedDb?._id || (cached?.devyPlayerId || null),
+        name: resolvedName,
+        associatedPlayerId: noteEntry.associatedPlayerId,
+        associatedPlayerName: noteEntry.associatedPlayerName,
+        fromPlayerNote: true,
+        position,
+        college: matchedDb?.college || cached?.college || matchedSleeper.college || null,
+        devyClass: matchedDb?.devyClass || cached?.devyClass || null,
+        devyKtcValue: matchedDb?.devyKtcValue || 0,
+        devyKtcRank: matchedDb?.devyKtcRank || null,
+        ktcValue: matchedDb?.ktcValue || 0,
+        fantasyProsValue: matchedDb?.fantasyProsValue || 0,
+        fantasyProsRank: matchedDb?.fantasyProsRank || null,
+        dasScore: matchedDb?.dasScore || null,
+        sheetRank: matchedDb?.sheetRank || null,
+        sheetRating: matchedDb?.sheetRating || null,
+        sheetAvgOvrRank: matchedDb?.sheetAvgOvrRank || null,
+        sheetVsKtcDelta: (matchedDb?.sheetRank && matchedDb?.devyKtcRank) ? (matchedDb.devyKtcRank - matchedDb.sheetRank) : null,
+        ownerId: noteEntry.ownerId || null,
+        ownerUsername: noteEntry.ownerUsername || null,
+        ownerTeamName: noteEntry.ownerTeamName || null,
+        rawAlias: noteEntry.rawAlias || null,
+        onTaxi: !!noteEntry.onTaxi,
+        inOurDb: !!matchedDb,
       });
     }
 
@@ -986,6 +1196,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         // Exclude players currently rostered in this league (by sleeperId or name)
         if (p.sleeperId && devyRosteredIds.has(p.sleeperId)) return false;
         if (rosteredNames.has(normalizeName(p.name))) return false;
+        if (rosteredDevyNames.has(normalizeName(p.name))) return false;
         return true;
       })
       .map(p => {
@@ -1109,6 +1320,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       return {
         sleeperId: id,
         name,
+        associatedPlayerId: id,
         position: sp.position || '?',
         college: sp.college || null,
         devyClass: null,
@@ -1119,10 +1331,68 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         dasScore: null,
         ownerId: owner.ownerId || null,
         ownerUsername: owner.username || null,
+        ownerTeamName: owner.ownerTeamName || null,
         onTaxi: !!owner.onTaxi,
         inOurDb: false,
       };
     }).filter(Boolean);
+
+    // Persist observed devy ownership rows to a cross-league cache so future
+    // note lookups can resolve faster and with better attribution.
+    const snapshotRows = [...rosterList, ...unknownPlayers];
+    const snapshotOps = [];
+    const now = new Date();
+    for (const row of snapshotRows) {
+      const normalizedDevyName = normalizeName(row.name);
+      if (!normalizedDevyName || !row.ownerId) continue;
+      const sourceType = row.fromPlayerNote ? 'note' : 'roster';
+      const associatedPlayerId = row.associatedPlayerId || (sourceType === 'roster' ? row.sleeperId : null);
+      const associatedPlayerName = row.associatedPlayerName || null;
+
+      snapshotOps.push({
+        updateOne: {
+          filter: {
+            sourceLeagueId: leagueId,
+            managerSleeperId: row.ownerId,
+            associatedPlayerId: associatedPlayerId || null,
+            normalizedDevyName,
+          },
+          update: {
+            $set: {
+              normalizedDevyName,
+              devyName: row.name,
+              devySleeperId: row.sleeperId || null,
+              devyPlayerId: row.devyPlayerId || null,
+              position: row.position || null,
+              college: row.college || null,
+              devyClass: row.devyClass || null,
+              sourceType,
+              managerSleeperId: row.ownerId,
+              managerUsername: row.ownerUsername || null,
+              managerTeamName: row.ownerTeamName || null,
+              sourceLeagueId: leagueId,
+              associatedPlayerId: associatedPlayerId || null,
+              associatedPlayerName,
+              rawAlias: row.rawAlias || null,
+              onTaxi: !!row.onTaxi,
+              lastSeenAt: now,
+            },
+            $setOnInsert: {
+              firstSeenAt: now,
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+
+    if (snapshotOps.length > 0) {
+      try {
+        await DevyOwnershipSnapshot.bulkWrite(snapshotOps, { ordered: false });
+      } catch (e) {
+        console.warn('[DevyPool] Snapshot cache write unavailable:', e.message);
+      }
+    }
 
     res.json({
       leagueId,
