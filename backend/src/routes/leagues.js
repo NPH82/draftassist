@@ -940,6 +940,27 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       console.warn('[DevyPool] Live roster metadata unavailable:', rostersRes.reason?.message || rostersRes.reason);
     }
 
+    // During a live draft, exclude already picked players from compare pools.
+    const draftedPlayerIds = new Set();
+    const isLiveDraftStatus = (status) => {
+      const s = String(status || '').toLowerCase();
+      return s === 'drafting' || s === 'paused';
+    };
+    if (league.draftId) {
+      try {
+        const draftData = await sleeperService.getDraft(league.draftId);
+        if (isLiveDraftStatus(draftData?.status)) {
+          const draftPicks = await sleeperService.getDraftPicks(league.draftId);
+          for (const pick of (draftPicks || [])) {
+            const playerId = String(pick?.player_id || '').trim();
+            if (playerId) draftedPlayerIds.add(playerId);
+          }
+        }
+      } catch (e) {
+        console.warn('[DevyPool] Live draft picks unavailable:', e.message);
+      }
+    }
+
     const aliasByPlayerId = new Map(); // playerId -> [alias1, alias2, ...]
     const pushAliasesFromMeta = (metadata) => {
       const maps = getAliasMapsFromMetadata(metadata || {});
@@ -1313,6 +1334,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     // Build available pool: all devy players in our DB NOT on any roster in this league
     const availablePool = devyDbPlayers
       .filter(p => {
+        // Exclude players already picked in the current live draft.
+        if (p.sleeperId && draftedPlayerIds.has(p.sleeperId)) return false;
         // Exclude players currently rostered in this league (by sleeperId or name)
         if (p.sleeperId && devyRosteredIds.has(p.sleeperId)) return false;
         if (rosteredNames.has(normalizeName(p.name))) return false;
@@ -1384,6 +1407,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
     const availableRookies = (devyEnabled ? rookieDbPlayers : [])
       .filter((p) => {
+        // Exclude rookies already selected in the current live draft.
+        if (p.sleeperId && draftedPlayerIds.has(p.sleeperId)) return false;
         // If tied to a Sleeper ID and already rostered/taxi, it's not available in this league.
         if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
 

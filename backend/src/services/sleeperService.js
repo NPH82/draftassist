@@ -15,6 +15,12 @@ const _leagueUsersCache = new Map(); // key -> { value, at }
 const _leagueRostersCache = new Map(); // key -> { value, at }
 const _leagueUsersInFlight = new Map(); // key -> Promise
 const _leagueRostersInFlight = new Map(); // key -> Promise
+const DRAFT_TTL_MS = 20 * 1000; // 20s
+const DRAFT_PICKS_TTL_MS = 15 * 1000; // 15s
+const _draftCache = new Map(); // key -> { value, at }
+const _draftPicksCache = new Map(); // key -> { value, at }
+const _draftInFlight = new Map(); // key -> Promise
+const _draftPicksInFlight = new Map(); // key -> Promise
 
 function getCachedValue(cache, key, ttlMs) {
   const hit = cache.get(key);
@@ -103,13 +109,31 @@ async function getLeagueDrafts(leagueId) {
 }
 
 async function getDraft(draftId) {
-  const { data } = await http.get(`/draft/${draftId}`);
-  return data;
+  const key = String(draftId);
+  return getOrLoadWithDedup({
+    cache: _draftCache,
+    inFlight: _draftInFlight,
+    key,
+    ttlMs: DRAFT_TTL_MS,
+    loader: async () => {
+      const { data } = await http.get(`/draft/${draftId}`);
+      return data;
+    },
+  });
 }
 
 async function getDraftPicks(draftId) {
-  const { data } = await http.get(`/draft/${draftId}/picks`);
-  return data;  // array of pick objects
+  const key = String(draftId);
+  return getOrLoadWithDedup({
+    cache: _draftPicksCache,
+    inFlight: _draftPicksInFlight,
+    key,
+    ttlMs: DRAFT_PICKS_TTL_MS,
+    loader: async () => {
+      const { data } = await http.get(`/draft/${draftId}/picks`);
+      return data; // array of pick objects
+    },
+  });
 }
 
 async function getTradedPicks(draftId) {
