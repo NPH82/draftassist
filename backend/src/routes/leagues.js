@@ -528,7 +528,7 @@ router.get('/', requireAuth, async (req, res) => {
     // expectations updated over time without blocking league list responses.
     const completedDrafts = leagueData
       .filter(Boolean)
-      .filter((lg) => lg.draftId && String(lg.status || '').toLowerCase() === 'complete')
+      .filter((lg) => lg.draftId)
       .map((lg) => ({ draftId: lg.draftId, leagueId: lg.leagueId, season: lg.season }));
     if (completedDrafts.length > 0) {
       setImmediate(async () => {
