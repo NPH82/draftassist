@@ -54,6 +54,16 @@ function normalizeName(value) {
     .trim();
 }
 
+function buildDevyRosterDedupKey({ ownerId, associatedPlayerId, devyPlayerId, sleeperId, name }) {
+  const ownerKey = String(ownerId || '').trim();
+  const associatedKey = String(associatedPlayerId || '').trim();
+  const devyPlayerKey = devyPlayerId ? String(devyPlayerId).trim() : '';
+  const sleeperKey = String(sleeperId || '').trim();
+  const nameKey = normalizeName(name);
+  const identity = devyPlayerKey || sleeperKey || nameKey;
+  return `${ownerKey}:${associatedKey}:${identity}`;
+}
+
 function isSleeperDevyPlayer(sp = {}) {
   if (!sp || typeof sp !== 'object') return false;
   // Sleeper's official devy flag.
@@ -1312,7 +1322,13 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     }
 
     const existingRosteredKeys = new Set(
-      rosterList.map((row) => `${row.ownerId || ''}:${row.sleeperId || row.associatedPlayerName || ''}:${normalizeName(row.name)}`)
+      rosterList.map((row) => buildDevyRosterDedupKey({
+        ownerId: row.ownerId,
+        associatedPlayerId: row.associatedPlayerId,
+        devyPlayerId: row.devyPlayerId,
+        sleeperId: row.sleeperId,
+        name: row.name,
+      }))
     );
     const rosteredDevyNames = new Set(
       rosterList.map((row) => normalizeName(row.name)).filter(Boolean)
@@ -1330,7 +1346,13 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const position = matchedDb?.position || cached?.position || matchedSleeper.position || noteEntry.positionHint || '?';
       if (position !== '?' && !positionAllowed(position)) continue;
 
-      const dedupeKey = `${noteEntry.ownerId || ''}:${noteEntry.associatedPlayerId || ''}:${normalizeName(resolvedName)}`;
+      const dedupeKey = buildDevyRosterDedupKey({
+        ownerId: noteEntry.ownerId,
+        associatedPlayerId: noteEntry.associatedPlayerId,
+        devyPlayerId: matchedDb?._id || cached?.devyPlayerId || null,
+        sleeperId: matchedDb?.sleeperId || cached?.devySleeperId || null,
+        name: resolvedName,
+      });
       if (existingRosteredKeys.has(dedupeKey)) continue;
       existingRosteredKeys.add(dedupeKey);
       rosteredDevyNames.add(normalizeName(resolvedName));
