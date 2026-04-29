@@ -65,39 +65,75 @@ function isSleeperDevyPlayer(sp = {}) {
   return yearsExp === 0 && !sp.team && !!sp.college;
 }
 
+function isLikelyPlaceholderPlayer(sp = {}) {
+  if (!sp || typeof sp !== 'object') return false;
+  const pos = String(sp.position || '').toUpperCase();
+  if (pos === 'K' || pos === 'DEF' || pos === 'DST') return true;
+  const status = String(sp.status || '').toLowerCase();
+  if (status === 'inactive' || status === 'retired') return true;
+  if (sp.active === false) return true;
+  return false;
+}
+
+function parseMetadataAliasMap(value) {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getAliasMapsFromMetadata(metadata = {}) {
+  if (!metadata || typeof metadata !== 'object') return [];
+  const out = [];
+  const pushMap = (value) => {
+    const map = parseMetadataAliasMap(value);
+    if (map) out.push(map);
+  };
+
+  pushMap(metadata.player_nicknames);
+  pushMap(metadata.player_notes);
+  pushMap(metadata.player_nickname);
+  pushMap(metadata.player_note);
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!/player|note|nick/i.test(key)) continue;
+    pushMap(value);
+  }
+
+  return out;
+}
+
+function pickBestAlias(rawAliases = [], { preferDetailed = false } = {}) {
+  if (!Array.isArray(rawAliases) || rawAliases.length === 0) return null;
+
+  const score = (text) => {
+    const value = String(text || '').trim();
+    if (!value) return -1;
+    let s = 0;
+    if (/\([^)]{3,}\)/.test(value)) s += 8;
+    if (/\b(QB|RB|WR|TE|LB|DL|DE|DT|CB|S|DB|EDGE|ED)\b/i.test(value)) s += 4;
+    if (/[,;/+]|\band\b/i.test(value)) s += 1;
+    if (preferDetailed) s += Math.min(6, Math.floor(value.length / 8));
+    return s;
+  };
+
+  return rawAliases
+    .map((v) => String(v || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => score(b) - score(a))[0] || null;
+}
+
 function getPlayerAliasFromMetadata(metadata = {}, playerId) {
   if (!metadata || !playerId) return null;
 
-  const asMap = (value) => {
-    if (!value) return null;
-    if (typeof value === 'object' && !Array.isArray(value)) return value;
-    if (typeof value !== 'string') return null;
-    const trimmed = value.trim();
-    if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('"{'))) return null;
-    try {
-      const parsed = JSON.parse(trimmed);
-      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const pushCandidateMap = (maps, candidate) => {
-    const map = asMap(candidate);
-    if (map) maps.push(map);
-  };
-
-  const possibleMaps = [];
-  pushCandidateMap(possibleMaps, metadata.player_nicknames);
-  pushCandidateMap(possibleMaps, metadata.player_notes);
-  pushCandidateMap(possibleMaps, metadata.player_nickname);
-  pushCandidateMap(possibleMaps, metadata.player_note);
-
-  // Some leagues store player note maps under custom metadata keys.
-  for (const [key, value] of Object.entries(metadata)) {
-    if (!/player|note|nick/i.test(key)) continue;
-    pushCandidateMap(possibleMaps, value);
-  }
+  const possibleMaps = getAliasMapsFromMetadata(metadata);
 
   for (const map of possibleMaps) {
     if (map && typeof map === 'object' && !Array.isArray(map) && map[playerId]) {
@@ -937,6 +973,19 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       console.warn('[DevyPool] League user metadata unavailable:', e.message);
     }
 
+    const aliasByPlayerId = new Map(); // playerId -> [alias1, alias2, ...]
+    for (const metadata of Object.values(userMetaById)) {
+      const maps = getAliasMapsFromMetadata(metadata || {});
+      for (const map of maps) {
+        for (const [playerId, raw] of Object.entries(map)) {
+          const alias = String(raw || '').trim();
+          if (!playerId || !alias) continue;
+          if (!aliasByPlayerId.has(playerId)) aliasByPlayerId.set(playerId, []);
+          aliasByPlayerId.get(playerId).push(alias);
+        }
+      }
+    }
+
     // Collect every player ID across all rosters (active + taxi).
     // Also parse commissioner-managed player notes to discover attached devy prospects
     // stored as aliases (often inside parentheses).
@@ -950,9 +999,27 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const ownerMeta = userMetaById[roster.ownerId] || {};
       const pushRosterId = (id, onTaxi) => {
         allRosterIds.add(id);
-        const rawAlias = getPlayerAliasFromMetadata(ownerMeta, id);
-        const aliasCandidates = extractDevyCandidatesFromAlias(rawAlias);
-        const primaryAlias = aliasCandidates[0]?.name || (rawAlias ? String(rawAlias).trim() : null);
+        const sp = sleeperPlayerMap[id] || {};
+        const ownerAlias = getPlayerAliasFromMetadata(ownerMeta, id);
+        const globalAliases = aliasByPlayerId.get(id) || [];
+        const combinedAliases = [ownerAlias, ...globalAliases]
+          .map((v) => String(v || '').trim())
+          .filter(Boolean);
+        const rawAlias = pickBestAlias(combinedAliases, { preferDetailed: isLikelyPlaceholderPlayer(sp) });
+
+        const aliasCandidates = [];
+        const seenAliasCandidate = new Set();
+        for (const aliasText of combinedAliases) {
+          for (const candidate of extractDevyCandidatesFromAlias(aliasText)) {
+            const key = normalizeName(candidate.name);
+            if (!key || seenAliasCandidate.has(key)) continue;
+            seenAliasCandidate.add(key);
+            aliasCandidates.push(candidate);
+          }
+        }
+        const primaryAlias = aliasCandidates[0]?.name || rawAlias || null;
+
+        const primaryPositionHint = aliasCandidates[0]?.positionHint || null;
 
         if (!idToRoster[id]) {
           idToRoster[id] = {
@@ -961,13 +1028,15 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
             ownerTeamName: roster.ownerTeamName || null,
             onTaxi: !!onTaxi,
             devyAlias: primaryAlias || null,
+            devyPositionHint: primaryPositionHint,
           };
         } else {
           if (!idToRoster[id].devyAlias && primaryAlias) idToRoster[id].devyAlias = primaryAlias;
+          if (!idToRoster[id].devyPositionHint && primaryPositionHint) idToRoster[id].devyPositionHint = primaryPositionHint;
           if (!idToRoster[id].ownerTeamName && roster.ownerTeamName) idToRoster[id].ownerTeamName = roster.ownerTeamName;
         }
 
-        const associatedPlayer = sleeperPlayerMap[id] || {};
+        const associatedPlayer = sp;
         const associatedPlayerName = associatedPlayer.full_name
           || `${associatedPlayer.first_name || ''} ${associatedPlayer.last_name || ''}`.trim()
           || id;
@@ -1115,19 +1184,37 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const rosterList = [];
     for (const id of devyRosteredIds) {
       const sp = sleeperPlayerMap[id] || {};
-      const db = devyBySleeperID[id];
+      // For alias-based entries (placeholder players), try to resolve the devy DB
+      // record by the alias name rather than by the placeholder's sleeperId.
       const owner = idToRoster[id] || {};
-
-      const officialName = db?.name || sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
+      const officialName = sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
       const alias = owner.devyAlias ? String(owner.devyAlias).trim() : null;
       const isAliasName = !!(alias && alias.toLowerCase() !== officialName.toLowerCase());
       const name = isAliasName ? alias : officialName;
-      const position = db?.position || sp.position || '?';
+
+      // When alias-based, look up the devy DB by alias name for correct stats/position.
+      // Fall back to the placeholder's DB entry only for genuine devy roster IDs.
+      const dbById = devyBySleeperID[id];
+      const dbByAlias = isAliasName ? resolveDevyByName(alias) : null;
+      const db = dbByAlias || dbById;
+
+      // Determine position: prefer resolved devy record, then stored hint, then
+      // the placeholder's own position only when it is an allowed devy position.
+      const spPosition = String(sp.position || '').toUpperCase();
+      const placeholderPosAllowed = positionAllowed(spPosition);
+      const position = db?.position
+        || (owner.devyPositionHint && positionAllowed(owner.devyPositionHint) ? owner.devyPositionHint : null)
+        || (placeholderPosAllowed ? spPosition : null)
+        || '?';
+
+      // Skip only when there is genuinely no positional information and the
+      // placeholder position is not an allowed devy position.
       if (!positionAllowed(position)) continue;
+
       const college = db?.college || sp.college || null;
 
       rosterList.push({
-        sleeperId: id,
+        sleeperId: isAliasName ? (db?.sleeperId || null) : id,
         devyPlayerId: db?._id || null,
         name,
         associatedPlayerId: id,

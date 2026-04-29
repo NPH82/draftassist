@@ -180,3 +180,5 @@ If position need tags feel stale, refresh league cache by reloading the Dashboar
 **Devy Drafted tab missing prospects from League Notes**: Devy pool now parses commissioner-managed player notes/nicknames for parenthetical prospects (for example, `Elliott Fry (Ahmad Hardy RB Missouri)`) and cross-references all leaguemate rosters. If names still do not appear under Drafted Devy, confirm the note is attached to a rostered player and includes the devy name in parentheses.
 
 The backend also persists discovered drafted devy mappings into `DevyOwnershipSnapshot` (manager + team + league scoped). This cache is reused by future devy-pool calls to speed up cross-league note resolution for all users.
+
+No per-league spreadsheet is required. Devy mapping is inferred directly from Sleeper league metadata notes/nicknames across all managers in that league, with extra weighting for placeholder roster slots (K/DEF/inactive or retired players) where commissioners commonly store devy notes.
