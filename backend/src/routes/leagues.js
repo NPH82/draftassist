@@ -14,6 +14,7 @@ const {
   buildRosterComposition,
   scoreDraftFit,
 } = require('../services/winWindowService');
+const { ingestCompletedDraftTrends } = require('../services/draftTrendService');
 const { generateBuySellAlerts } = require('../services/alertService');
 const { calcPersonalRankScore } = require('../services/scoringEngine');
 const League = require('../models/League');
@@ -523,6 +524,29 @@ router.get('/', requireAuth, async (req, res) => {
       }
     });
 
+    // Background trend ingest for drafts that have completed. This keeps ADP
+    // expectations updated over time without blocking league list responses.
+    const completedDrafts = leagueData
+      .filter(Boolean)
+      .filter((lg) => lg.draftId && String(lg.status || '').toLowerCase() === 'complete')
+      .map((lg) => ({ draftId: lg.draftId, leagueId: lg.leagueId, season: lg.season }));
+    if (completedDrafts.length > 0) {
+      setImmediate(async () => {
+        try {
+          await mapWithConcurrency(completedDrafts, 3, async (d) => {
+            await ingestCompletedDraftTrends({
+              leagueId: d.leagueId,
+              draftId: d.draftId,
+              season: d.season,
+              force: false,
+            });
+          });
+        } catch (e) {
+          console.warn('[Leagues] Draft trend ingest background run failed:', e.message);
+        }
+      });
+    }
+
     res.json({ leagues: leagueData.filter(Boolean) });
   } catch (err) {
     console.error('[Leagues]', err.message);
@@ -570,6 +594,34 @@ router.post('/:leagueId/preferences', requireAuth, async (req, res) => {
       leagueId,
       devyEnabled: !!updated?.devyEnabled,
       idpEnabled: !!updated?.idpEnabled,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/leagues/:leagueId/adp-trends-sync -- force ADP ingest for completed league draft
+router.post('/:leagueId/adp-trends-sync', requireAuth, async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const league = await League.findOne({ sleeperId: leagueId }).lean();
+    if (!league) return res.status(404).json({ error: 'League not found' });
+    const userIsInLeague = (league.rosters || []).some((roster) => roster.ownerId === req.user.sleeperId);
+    if (!userIsInLeague) return res.status(403).json({ error: 'You do not have access to this league' });
+    if (!league.draftId) return res.status(400).json({ error: 'No draft found for this league' });
+
+    const result = await ingestCompletedDraftTrends({
+      leagueId: league.sleeperId,
+      draftId: league.draftId,
+      season: league.season,
+      force: true,
+    });
+
+    res.json({
+      ok: !!result?.ok,
+      leagueId: league.sleeperId,
+      draftId: league.draftId,
+      result,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -52,6 +52,12 @@ const playerSchema = new mongoose.Schema({
   ktcValue: Number,
   ktcRank: Number,
   underdogAdp: Number,
+  sleeperObservedAdp: Number,
+  sleeperObservedAdpCount: Number,
+  sleeperRookieObservedAdp: Number,
+  sleeperRookieObservedAdpCount: Number,
+  expectedAdp: Number,
+  adpTrendDelta: Number,
 
   // Manager's personal ranking (1 = top pick). Overrides algorithmic sort when set.
   personalRank: { type: Number, default: null },

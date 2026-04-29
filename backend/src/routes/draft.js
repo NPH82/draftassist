@@ -95,8 +95,12 @@ function buildTeamContext(players = []) {
 }
 
 function marketRankSignal(player = {}, fallbackRank = 999) {
+  const expected = Number(player.expectedAdp || 0);
+  const observed = Number(player.sleeperObservedAdp || 0);
   const adp = Number(player.underdogAdp || 0);
   const fp = Number(player.fantasyProsRank || 0);
+  if (expected > 0) return expected;
+  if (observed > 0) return observed;
   if (adp > 0) return adp;
   // For devy/rookie players without ADP data, FP rank alone can be overoptimistic.
   // Use personal rank as a floor (pessimistic signal) — if user ranks a player later
@@ -106,6 +110,60 @@ function marketRankSignal(player = {}, fallbackRank = 999) {
     return personal > fp ? Math.round((fp + personal) / 2) : fp;
   }
   return fallbackRank;
+}
+
+function currentRoundForPick(pickNumber, totalRosters) {
+  return Math.max(1, Math.ceil((Number(pickNumber || 1)) / Math.max(1, Number(totalRosters || 12))));
+}
+
+function needTierWeight(tier) {
+  const normalized = String(tier || '').toLowerCase();
+  if (normalized === 'high') return 1;
+  if (normalized === 'medium') return 0.55;
+  return 0.2;
+}
+
+function buildAcquisitionOutlook({ player, currentOverallPick, myNextPickNumber, totalRosters, pressureContext }) {
+  const expectedAdp = Number(player.expectedAdp || player.sleeperObservedAdp || player.underdogAdp || player.fantasyProsRank || 0);
+  const trendDelta = Number(player.adpTrendDelta || 0);
+  const nextWindow = Math.max(0, (myNextPickNumber - currentOverallPick) - 1);
+  const beforeMyPick = pressureContext.beforeMyPickOwners || [];
+
+  const contributors = [];
+  let pressure = 0;
+  for (const ownerId of beforeMyPick) {
+    const profile = pressureContext.profileByOwner[ownerId] || {};
+    const rosterNeed = pressureContext.rosterNeedsByOwner[ownerId] || {};
+    const earlyWeights = profile.earlyRoundPositionWeights || {};
+    const allWeights = profile.positionWeights || {};
+    const round = currentRoundForPick(myNextPickNumber, totalRosters);
+    const positionWeight = Number((round <= 2 ? earlyWeights[player.position] : allWeights[player.position]) || allWeights[player.position] || 0.25);
+    const needWeight = needTierWeight(rosterNeed[player.position]);
+    const ownerPressure = (positionWeight * 0.65) + (needWeight * 0.35);
+    pressure += ownerPressure;
+    contributors.push({
+      ownerId,
+      username: pressureContext.ownerNameById[ownerId] || ownerId,
+      pick: pressureContext.nextPickByOwner[ownerId] || null,
+      pressure: Math.round(ownerPressure * 100) / 100,
+      needTier: rosterNeed[player.position] || 'low',
+    });
+  }
+
+  contributors.sort((a, b) => b.pressure - a.pressure);
+  const pressureScore = Math.round((pressure / Math.max(1, nextWindow)) * 100) / 100;
+  const targetPick = expectedAdp > 0 ? Math.round(expectedAdp) : null;
+  const impliedAvailability = targetPick != null ? (targetPick >= myNextPickNumber ? 'likely' : 'at_risk') : 'unknown';
+
+  return {
+    expectedAdp: expectedAdp > 0 ? expectedAdp : null,
+    adpTrendDelta: Number.isFinite(trendDelta) ? trendDelta : null,
+    targetPick,
+    picksUntilMyNext: nextWindow,
+    leaguematePressure: pressureScore,
+    impliedAvailability,
+    topThreats: contributors.slice(0, 3),
+  };
 }
 
 function estimateTradeTargetPick(player = {}, { myNextPickNumber, totalRosters = 12, isRookieDraft = false }) {
@@ -553,6 +611,36 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       .filter(r => r.ownerId !== sleeperId)
       .map(r => ({ ...r, nextPickNumber: myNextPickNumber - picksUntilMe })) || [];
 
+    const slotToOwner = {};
+    for (const [ownerId, slot] of Object.entries(draftData.draft_order || {})) {
+      slotToOwner[slot] = ownerId;
+    }
+    const beforeMyPickOwners = [];
+    const seenBefore = new Set();
+    const ownerNameById = Object.fromEntries((league?.rosters || []).map((r) => [r.ownerId, r.ownerUsername || r.ownerId]));
+    const nextPickByOwner = {};
+    for (let pickNum = currentOverallPick + 1; pickNum < myNextPickNumber; pickNum += 1) {
+      const slot = ((pickNum - 1) % totalRosters) + 1;
+      const ownerId = slotToOwner[slot];
+      if (!ownerId || ownerId === sleeperId) continue;
+      if (!nextPickByOwner[ownerId]) nextPickByOwner[ownerId] = pickNum;
+      if (seenBefore.has(ownerId)) continue;
+      seenBefore.add(ownerId);
+      beforeMyPickOwners.push(ownerId);
+    }
+    const beforeProfiles = await ManagerProfile.find({ sleeperId: { $in: beforeMyPickOwners } })
+      .select('sleeperId positionWeights earlyRoundPositionWeights')
+      .lean();
+    const profileByOwner = Object.fromEntries(beforeProfiles.map((p) => [p.sleeperId, p]));
+    const rosterNeedsByOwner = Object.fromEntries((league?.rosters || []).map((r) => [r.ownerId, r.positionalNeeds || {}]));
+    const pressureContext = {
+      beforeMyPickOwners,
+      profileByOwner,
+      rosterNeedsByOwner,
+      ownerNameById,
+      nextPickByOwner,
+    };
+
     const availabilitySeed = await predictAvailability(
       availablePlayers.slice(0, 120), myNextPickNumber, currentOverallPick, remainingRosters
     );
@@ -590,6 +678,13 @@ router.get('/:draftId', requireAuth, async (req, res) => {
           marketRank,
           marketReachGap: gap,
           reachPenalty: penalty,
+          acquisitionOutlook: buildAcquisitionOutlook({
+            player: p,
+            currentOverallPick,
+            myNextPickNumber,
+            totalRosters,
+            pressureContext,
+          }),
           recScore,
           tradeBackCandidate: gap >= tbGapThreshold && (availabilityProb == null || availabilityProb >= 0.5),
         };
@@ -623,6 +718,13 @@ router.get('/:draftId', requireAuth, async (req, res) => {
           marketRank,
           marketReachGap: gap,
           reachPenalty: penalty,
+          acquisitionOutlook: buildAcquisitionOutlook({
+            player: p,
+            currentOverallPick,
+            myNextPickNumber,
+            totalRosters,
+            pressureContext,
+          }),
           needTier,
           needOrder: needOrder[needTier],
           recScore,
