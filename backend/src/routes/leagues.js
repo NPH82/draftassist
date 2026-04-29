@@ -21,6 +21,7 @@ const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const DevyOwnershipSnapshot = require('../models/DevyOwnershipSnapshot');
 const { extractDevyCandidatesFromAlias } = require('../utils/devyNoteParser');
+const { normalizeComparableName, scoreComparableNameMatch } = require('../utils/devyNameMatcher');
 
 const KTC_TO_FP = 68 / 9500;
 const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
@@ -1069,11 +1070,18 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const devyBySleeperID = Object.fromEntries(devyDbPlayers.map(p => [p.sleeperId, p]));
     const devyById = new Map(devyDbPlayers.map((p) => [String(p._id), p]));
     const devyByNormalizedName = new Map();
+    const devyByComparableName = new Map();
     for (const player of devyDbPlayers) {
       const key = normalizeName(player.name);
       if (!key) continue;
       if (!devyByNormalizedName.has(key)) devyByNormalizedName.set(key, []);
       devyByNormalizedName.get(key).push(player);
+
+      const comparableKey = normalizeComparableName(player.name);
+      if (comparableKey) {
+        if (!devyByComparableName.has(comparableKey)) devyByComparableName.set(comparableKey, []);
+        devyByComparableName.get(comparableKey).push(player);
+      }
     }
 
     const noteCandidateNames = [...new Set(
@@ -1122,6 +1130,10 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const exact = devyByNormalizedName.get(candidateNorm);
       if (exact && exact.length) return exact[0];
 
+      const comparableNorm = normalizeComparableName(candidateName);
+      const comparableExact = devyByComparableName.get(comparableNorm);
+      if (comparableExact && comparableExact.length) return comparableExact[0];
+
       let best = null;
       let bestLen = 0;
       for (const [nameNorm, players] of devyByNormalizedName.entries()) {
@@ -1135,7 +1147,21 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         }
       }
 
-      return best;
+      if (best) return best;
+
+      // Final fallback: fuzzy comparable matching for nickname/suffix/typo cases.
+      // Examples: Nate Fraizer -> Nathan Frazier, Bryant Wesco Clemson -> Bryant Wesco Jr.
+      let bestFuzzy = null;
+      let bestScore = 0;
+      for (const player of devyDbPlayers) {
+        const score = scoreComparableNameMatch(candidateName, player.name);
+        if (score > bestScore) {
+          bestFuzzy = player;
+          bestScore = score;
+        }
+      }
+
+      return bestScore >= 70 ? bestFuzzy : null;
     };
 
     // Name-based roster map helps when local DB sleeperIds are stale/incorrect.
