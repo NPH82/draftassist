@@ -168,6 +168,79 @@ function sanitizeDevyName(name) {
     .trim();
 }
 
+function scoreDevyRecord(record = {}) {
+  return (
+    (record.sheetRank ? 100000 - record.sheetRank : 0) +
+    (record.devyKtcRank ? 50000 - record.devyKtcRank : 0) +
+    Number(record.devyKtcValue || 0) +
+    (record.bigBoardRank ? 5000 - record.bigBoardRank : 0) +
+    (record.sleeperId ? 250 : 0) +
+    (record.college ? 25 : 0)
+  );
+}
+
+async function dedupeDevyPlayers() {
+  const records = await Player.find({ isDevy: true })
+    .select('_id name position college devyClass devyKtcValue devyKtcRank devyFpRank bigBoardRank sheetRank sheetRating sheetAvgOvrRank sleeperId athletics dataSource')
+    .lean();
+
+  const groups = new Map();
+  for (const record of records) {
+    const key = devyNorm(record.name);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(record);
+  }
+
+  let deduped = 0;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+
+    const ordered = group.slice().sort((a, b) => scoreDevyRecord(b) - scoreDevyRecord(a));
+    const primary = ordered[0];
+    const secondary = ordered.slice(1);
+    const merged = {
+      name: sanitizeDevyName(primary.name),
+      position: primary.position,
+      college: primary.college || null,
+      devyClass: primary.devyClass || null,
+      devyKtcValue: primary.devyKtcValue || null,
+      devyKtcRank: primary.devyKtcRank || null,
+      devyFpRank: primary.devyFpRank || null,
+      bigBoardRank: primary.bigBoardRank || null,
+      sheetRank: primary.sheetRank || null,
+      sheetRating: primary.sheetRating || null,
+      sheetAvgOvrRank: primary.sheetAvgOvrRank || null,
+      sleeperId: primary.sleeperId || null,
+      athletics: primary.athletics || undefined,
+      isDevy: true,
+      isRookie: false,
+      dataSource: primary.dataSource || 'devy-scrape',
+      lastUpdated: new Date(),
+    };
+
+    for (const record of secondary) {
+      if (!merged.sheetRank && record.sheetRank) merged.sheetRank = record.sheetRank;
+      if (!merged.sheetRating && record.sheetRating) merged.sheetRating = record.sheetRating;
+      if (!merged.sheetAvgOvrRank && record.sheetAvgOvrRank) merged.sheetAvgOvrRank = record.sheetAvgOvrRank;
+      if (!merged.devyKtcRank && record.devyKtcRank) merged.devyKtcRank = record.devyKtcRank;
+      if (!merged.devyKtcValue && record.devyKtcValue) merged.devyKtcValue = record.devyKtcValue;
+      if (!merged.bigBoardRank && record.bigBoardRank) merged.bigBoardRank = record.bigBoardRank;
+      if (!merged.devyFpRank && record.devyFpRank) merged.devyFpRank = record.devyFpRank;
+      if (!merged.college && record.college) merged.college = record.college;
+      if (!merged.devyClass && record.devyClass) merged.devyClass = record.devyClass;
+      if (!merged.sleeperId && record.sleeperId) merged.sleeperId = record.sleeperId;
+      if (!merged.athletics?.fortyTime && record.athletics?.fortyTime) merged.athletics = record.athletics;
+    }
+
+    await Player.updateOne({ _id: primary._id }, { $set: merged }).catch(() => {});
+    await Player.deleteMany({ _id: { $in: secondary.map((record) => record._id) } }).catch(() => {});
+    deduped += secondary.length;
+  }
+
+  return deduped;
+}
+
 /**
  * Refresh devy (college prospect) rankings from four sources:
  *   1. KeepTradeCut API  — value/rank comparison for fantasy-relevant devy assets
@@ -405,8 +478,10 @@ async function refreshDevyRankings() {
     }
   }
 
+  const deduped = await dedupeDevyPlayers();
+
   console.log(
-    `[Scraper] refreshDevyRankings: ${created} created, ${updated} updated ` +
+    `[Scraper] refreshDevyRankings: ${created} created, ${updated} updated, ${deduped} deduped ` +
     `| KTC: ${ktcResult.data?.length ?? 0} | NFLMDB: ${nflmdbResult.data?.length ?? 0}` +
     ` | FP: ${fpResult.data?.length ?? 0} | Sheet: ${sheetResult.data?.length ?? 0}`
   );
@@ -414,6 +489,7 @@ async function refreshDevyRankings() {
     ok: true,
     created,
     updated,
+    deduped,
     sources: {
       ktc:    { ok: ktcResult.ok,    count: ktcResult.data?.length ?? 0 },
       nflmdb: { ok: nflmdbResult.ok, count: nflmdbResult.data?.length ?? 0 },
