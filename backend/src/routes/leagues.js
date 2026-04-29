@@ -68,16 +68,49 @@ function isSleeperDevyPlayer(sp = {}) {
 function getPlayerAliasFromMetadata(metadata = {}, playerId) {
   if (!metadata || !playerId) return null;
 
-  const possibleMaps = [
-    metadata.player_nicknames,
-    metadata.player_notes,
-    metadata.player_nickname,
-    metadata.player_note,
-  ].filter(Boolean);
+  const asMap = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('"{'))) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const pushCandidateMap = (maps, candidate) => {
+    const map = asMap(candidate);
+    if (map) maps.push(map);
+  };
+
+  const possibleMaps = [];
+  pushCandidateMap(possibleMaps, metadata.player_nicknames);
+  pushCandidateMap(possibleMaps, metadata.player_notes);
+  pushCandidateMap(possibleMaps, metadata.player_nickname);
+  pushCandidateMap(possibleMaps, metadata.player_note);
+
+  // Some leagues store player note maps under custom metadata keys.
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!/player|note|nick/i.test(key)) continue;
+    pushCandidateMap(possibleMaps, value);
+  }
 
   for (const map of possibleMaps) {
     if (map && typeof map === 'object' && !Array.isArray(map) && map[playerId]) {
       return String(map[playerId]).trim();
+    }
+  }
+
+  // Fallback for uncommon direct-key layouts.
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value !== 'string') continue;
+    if (key === playerId || key.endsWith(`:${playerId}`) || key.endsWith(`_${playerId}`)) {
+      const alias = value.trim();
+      if (alias) return alias;
     }
   }
 
