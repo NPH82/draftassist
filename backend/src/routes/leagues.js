@@ -1067,6 +1067,20 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       }
     }
 
+    // --- DIAGNOSTIC LOGGING (temporary) ---
+    console.log(`[DevyPool] league=${leagueId} devyEnabled=${devyEnabled} idpEnabled=${idpEnabled}`);
+    console.log(`[DevyPool] rosters=${(league.rosters || []).length} allRosterIds=${allRosterIds.size} aliasByPlayerId=${aliasByPlayerId.size} noteDerived=${noteDerivedDevyEntries.length}`);
+    for (const [pid, aliases] of aliasByPlayerId.entries()) {
+      console.log(`[DevyPool] alias playerId=${pid}:`, aliases);
+    }
+    for (const entry of noteDerivedDevyEntries) {
+      console.log(`[DevyPool] noteDerived:`, entry.candidateName, entry.positionHint, '<-', entry.associatedPlayerName);
+    }
+    for (const [id, owner] of Object.entries(idToRoster)) {
+      if (owner.devyAlias) console.log(`[DevyPool] idToRoster id=${id} alias="${owner.devyAlias}" posHint="${owner.devyPositionHint}"`);
+    }
+    // --- END DIAGNOSTIC ---
+
     // Identify which roster IDs are devy players (years_exp === -1 in Sleeper)
     // Also track players who were devy but just got drafted to an NFL team ("graduated")
     const devyRosteredIds = new Set();
@@ -1089,6 +1103,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         graduatedIds.add(id);
       }
     }
+    console.log(`[DevyPool] devyRosteredIds=${devyRosteredIds.size}:`, [...devyRosteredIds].slice(0, 20));
 
     // Load devy players from our DB
     const devyDbPlayers = await Player.find({ isDevy: true })
@@ -1290,6 +1305,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         inOurDb: !!matchedDb,
       });
     }
+
+    console.log(`[DevyPool] rosterList=${rosterList.length} rosteredDevyNames=${rosteredDevyNames.size}:`, [...rosteredDevyNames].slice(0, 20));
 
     // Build graduated list — devy players who are now on NFL rosters
     const graduatedList = [];
