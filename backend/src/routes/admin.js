@@ -352,8 +352,8 @@ router.post('/import-devy-players', requireAuth, async (req, res) => {
 router.get('/devy-players', requireAuth, async (req, res) => {
   try {
     const players = await Player.find({ isDevy: true })
-      .select('name position college devyClass devyKtcValue sleeperId dataSource bigBoardRank')
-      .sort({ devyKtcValue: -1 })
+      .select('name position college devyClass devyKtcValue devyKtcRank sheetRank sheetRating sleeperId dataSource bigBoardRank')
+      .sort({ sheetRank: 1, devyKtcRank: 1, devyKtcValue: -1 })
       .lean();
     res.json({ count: players.length, players });
   } catch (err) {
@@ -417,8 +417,8 @@ router.post('/fix-devy-flags', requireAuth, async (req, res) => {
 });
 
 // POST /api/admin/refresh/devy-rankings
-// Fetches KTC devy values, NFLMDB big board, and FP devy rankings.
-// Upserts real college prospects into DB with isDevy=true.
+// Fetches the curated Google Sheet, KTC devy values, NFLMDB big board, and FP devy rankings.
+// The sheet is the source of truth for ranking order; KTC remains a comparison signal.
 // Safe to run repeatedly — fires async so the response returns immediately.
 router.post('/refresh/devy-rankings', requireAuth, async (req, res) => {
   try {
@@ -426,7 +426,7 @@ router.post('/refresh/devy-rankings', requireAuth, async (req, res) => {
     refreshDevyRankings()
       .then(r => console.log('[Admin] Devy rankings refresh complete', JSON.stringify(r)))
       .catch(err => console.error('[Admin] Devy rankings refresh error', err));
-    res.json({ ok: true, message: 'Devy rankings refresh started — KTC + NFLMDB big board + FP will update within ~90 seconds' });
+    res.json({ ok: true, message: 'Devy rankings refresh started — Google Sheet + KTC + NFLMDB + FP will update within ~90 seconds' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

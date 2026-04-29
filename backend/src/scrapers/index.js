@@ -169,10 +169,11 @@ function sanitizeDevyName(name) {
 }
 
 /**
- * Refresh devy (college prospect) rankings from three sources:
- *   1. KeepTradeCut API  — primary: fantasy values, draft-class year
- *   2. NFL Mock Draft DB  — secondary: NFL draft projection, full college name
- *   3. FantasyPros       — supplementary: devyFpRank
+ * Refresh devy (college prospect) rankings from four sources:
+ *   1. KeepTradeCut API  — value/rank comparison for fantasy-relevant devy assets
+ *   2. NFL Mock Draft DB  — draft projection and college metadata
+ *   3. FantasyPros       — supplementary devy rank
+ *   4. Google Sheet      — source of truth for ranking order and all-position inclusion
  *
  * Unlike the old version this function UPSERTS new records so the devy pool
  * is seeded from real rankings data rather than relying on Sleeper alone.
@@ -251,6 +252,7 @@ async function refreshDevyRankings() {
         name: cleanName,
         position: p.position,
         devyKtcValue: p.value,
+        devyKtcRank: p.rank || null,
         isDevy: true,
         isRookie: false,
         lastUpdated: new Date(),
@@ -270,6 +272,7 @@ async function refreshDevyRankings() {
           team: null,
           college: college || null,
           devyKtcValue: p.value,
+          devyKtcRank: p.rank || null,
           devyClass: devyClass || null,
           bigBoardRank: nflmdb.bigBoardRank || null,
           devyFpRank: fp.rank || null,
@@ -343,9 +346,9 @@ async function refreshDevyRankings() {
     }
   }
 
-  // ── Pass 3: Google Sheet — augment with sheetRank / rating / avgOvrRank; create if missed above ─
+  // ── Pass 3: Google Sheet — source of truth for rank order and all-position coverage ─
   for (const p of (sheetResult.data || [])) {
-    if (!p.name || !DEVY_SKILL_POSITIONS.has(p.position)) continue;
+    if (!p.name || !p.position) continue;
 
     const cleanName = sanitizeDevyName(p.name);
     const key = devyNorm(cleanName);
@@ -367,10 +370,14 @@ async function refreshDevyRankings() {
     if (p.avgOvrRank !== null) setFields.sheetAvgOvrRank = p.avgOvrRank;
     if (p.fortyTime !== null)  setFields['athletics.fortyTime'] = p.fortyTime;
     if (fp.rank)               setFields.devyFpRank     = fp.rank;
+    if (nflmdb.bigBoardRank)   setFields.bigBoardRank   = nflmdb.bigBoardRank;
+    if (nflmdb.college)        setFields.college        = nflmdb.college;
+    if (nflmdb.devyClass)      setFields.devyClass      = nflmdb.devyClass;
 
     if (existing) {
       if (existing.isDevy === false && existing.team) continue;
       await Player.updateOne({ _id: existing._id }, { $set: setFields }).catch(() => {});
+      updated++;
     } else {
       try {
         await Player.create({
@@ -381,7 +388,9 @@ async function refreshDevyRankings() {
           sheetRank: p.sheetRank,
           sheetRating: p.rating || null,
           sheetAvgOvrRank: p.avgOvrRank || null,
+          athletics: p.fortyTime !== null ? { fortyTime: p.fortyTime } : undefined,
           devyClass: nflmdb.devyClass || null,
+          bigBoardRank: nflmdb.bigBoardRank || null,
           devyFpRank: fp.rank || null,
           isDevy: true,
           isRookie: false,

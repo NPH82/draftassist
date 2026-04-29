@@ -13,7 +13,7 @@ const playerSchema = new mongoose.Schema({
   // Identity
   sleeperId: { type: String, index: true },          // Sleeper player ID
   name: { type: String, required: true, index: true },
-  position: { type: String, enum: ['QB', 'RB', 'WR', 'TE'], required: true },
+  position: { type: String, required: true, uppercase: true, trim: true },
   team: String,                                       // NFL team abbreviation
   age: Number,
   birthdate: Date,
@@ -70,6 +70,7 @@ const playerSchema = new mongoose.Schema({
   isDevy: { type: Boolean, default: false },
   devyClass: Number,          // expected NFL draft year (e.g. 2027, 2028)
   devyKtcValue: Number,       // KTC's separate devy dynasty value scale
+  devyKtcRank: Number,        // KTC devy rank order for comparing against the sheet
   devyFpRank: Number,         // FantasyPros devy-specific rank
   bigBoardRank: Number,       // NFLMDB consensus big board rank for the prospect's class year
   sheetRank: Number,          // Overall rank from the DraftAssistant curated Google Sheet

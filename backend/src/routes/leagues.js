@@ -21,6 +21,9 @@ const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 
 const KTC_TO_FP = 68 / 9500;
+const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
+const IDP_POSITIONS = new Set(['LB', 'LB/ED', 'DE', 'DE/ED', 'DL', 'DL/ED', 'DT', 'CB', 'S']);
+const POSITION_FILTER_ORDER = ['QB', 'RB', 'WR', 'TE', 'LB', 'LB/ED', 'DE', 'DE/ED', 'DL', 'DL/ED', 'DT', 'CB', 'S'];
 
 function fpEquivalentValue(player = {}, isDevy = false) {
   const fp = Number(player.fantasyProsValue || 0);
@@ -101,6 +104,39 @@ function isActiveLeagueStatus(status) {
   const normalized = String(status || '').toLowerCase();
   // Sleeper league statuses are typically: pre_draft, drafting, in_season, complete.
   return normalized === 'pre_draft' || normalized === 'drafting' || normalized === 'in_season';
+}
+
+function inferDevyEnabled(league, existingLeague = null) {
+  if (typeof existingLeague?.devyEnabled === 'boolean') return existingLeague.devyEnabled;
+
+  const text = [league?.name, ...(league?.roster_positions || league?.rosterPositions || [])]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return /devy|campus|c2c/.test(text);
+}
+
+function inferIdpEnabled(rosterPositions = [], existingLeague = null) {
+  if (typeof existingLeague?.idpEnabled === 'boolean') return existingLeague.idpEnabled;
+
+  const normalized = (rosterPositions || []).map((pos) => String(pos || '').toUpperCase());
+  return normalized.some((pos) => (
+    pos === 'IDP_FLEX' || pos === 'FLEX_IDP' || pos === 'DL' || pos === 'DB' || pos === 'LB' ||
+    pos === 'CB' || pos === 'S' || pos === 'DE' || pos === 'DT'
+  ));
+}
+
+function allowsDevyPoolPosition(position, { devyEnabled, idpEnabled }) {
+  const normalized = String(position || '').toUpperCase();
+  if (!normalized) return false;
+  if (devyEnabled && SKILL_POSITIONS.has(normalized)) return true;
+  if (idpEnabled && IDP_POSITIONS.has(normalized)) return true;
+  return false;
+}
+
+function getLeaguePositionFilters({ devyEnabled, idpEnabled }) {
+  return POSITION_FILTER_ORDER.filter((position) => allowsDevyPoolPosition(position, { devyEnabled, idpEnabled }));
 }
 
 async function mapWithConcurrency(items, limit, mapper) {
@@ -286,6 +322,10 @@ router.get('/', requireAuth, async (req, res) => {
     // For managers with a smaller number of leagues, return full roster detail
     // automatically so league cards can show complete roster context.
     const includeRosters = includeRostersRequested || sleeperLeagues.length <= 24;
+    const existingLeagues = await League.find({ sleeperId: { $in: sleeperLeagues.map((league) => league.league_id).filter(Boolean) } })
+      .select('sleeperId devyEnabled idpEnabled')
+      .lean();
+    const existingLeagueById = Object.fromEntries(existingLeagues.map((league) => [league.sleeperId, league]));
 
     // Build player map for win window calculations.
     // Primary: our DB (has DAS scores, KTC/FP values, etc.), keyed by sleeperId.
@@ -321,6 +361,9 @@ router.get('/', requireAuth, async (req, res) => {
 
     const leagueData = await mapWithConcurrency(sleeperLeagues, 8, async (sl) => {
       try {
+        const existingLeague = existingLeagueById[sl.league_id] || null;
+        const devyEnabled = inferDevyEnabled(sl, existingLeague);
+        const idpEnabled = inferIdpEnabled(sl.roster_positions, existingLeague);
         const rosters = await sleeperService.getRosters(sl.league_id);
         const users = await sleeperService.buildUserMap(sl.league_id);
 
@@ -378,6 +421,8 @@ router.get('/', requireAuth, async (req, res) => {
             rosterPositions: sl.roster_positions,
             isSuperFlex: sleeperService.detectSuperFlex(sl.roster_positions),
             isPpr: sleeperService.detectPpr(sl.scoring_settings),
+            devyEnabled,
+            idpEnabled,
             draftId: sl.draft_id,
             rosters: processedRosters,
             lastUpdated: new Date(),
@@ -392,6 +437,8 @@ router.get('/', requireAuth, async (req, res) => {
           status: sl.status,
           isSuperFlex: sleeperService.detectSuperFlex(sl.roster_positions),
           isPpr: sleeperService.detectPpr(sl.scoring_settings),
+          devyEnabled,
+          idpEnabled,
           draftId: sl.draft_id,
           draftStatus: sl.status,
           totalRosters: sl.total_rosters,
@@ -417,6 +464,41 @@ router.get('/:leagueId', requireAuth, async (req, res) => {
     const cached = await League.findOne({ sleeperId: req.params.leagueId }).lean();
     if (!cached) return res.status(404).json({ error: 'League not found' });
     res.json(cached);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/leagues/:leagueId/preferences -- persist league-specific devy/idp toggles
+router.post('/:leagueId/preferences', requireAuth, async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const updates = {};
+
+    if (typeof req.body?.devyEnabled === 'boolean') updates.devyEnabled = req.body.devyEnabled;
+    if (typeof req.body?.idpEnabled === 'boolean') updates.idpEnabled = req.body.idpEnabled;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'At least one boolean preference is required' });
+    }
+
+    const league = await League.findOne({ sleeperId: leagueId }).lean();
+    if (!league) return res.status(404).json({ error: 'League not found' });
+    const userIsInLeague = (league.rosters || []).some((roster) => roster.ownerId === req.user.sleeperId);
+    if (!userIsInLeague) return res.status(403).json({ error: 'You do not have access to this league' });
+
+    const updated = await League.findOneAndUpdate(
+      { sleeperId: leagueId },
+      { $set: { ...updates, lastUpdated: new Date() } },
+      { new: true }
+    ).lean();
+
+    res.json({
+      ok: true,
+      leagueId,
+      devyEnabled: !!updated?.devyEnabled,
+      idpEnabled: !!updated?.idpEnabled,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -746,6 +828,10 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const { leagueId } = req.params;
     const league = await League.findOne({ sleeperId: leagueId }).lean();
     if (!league) return res.status(404).json({ error: 'League not found' });
+    const devyEnabled = inferDevyEnabled(league, league);
+    const idpEnabled = inferIdpEnabled(league.rosterPositions, league);
+    const positionFilters = getLeaguePositionFilters({ devyEnabled, idpEnabled });
+    const positionAllowed = (position) => allowsDevyPoolPosition(position, { devyEnabled, idpEnabled });
 
     // Fetch Sleeper player map so we can identify devy players by years_exp
     let sleeperPlayerMap = {};
@@ -817,7 +903,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
     // Load devy players from our DB
     const devyDbPlayers = await Player.find({ isDevy: true })
-      .select('sleeperId name position college devyClass devyKtcValue ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age')
+      .select('sleeperId name position college devyClass devyKtcValue devyKtcRank ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age sheetRank sheetRating sheetAvgOvrRank')
       .lean();
 
     const devyBySleeperID = Object.fromEntries(devyDbPlayers.map(p => [p.sleeperId, p]));
@@ -847,6 +933,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const isAliasName = !!(alias && alias.toLowerCase() !== officialName.toLowerCase());
       const name = isAliasName ? alias : officialName;
       const position = db?.position || sp.position || '?';
+      if (!positionAllowed(position)) continue;
       const college = db?.college || sp.college || null;
 
       rosterList.push({
@@ -858,10 +945,15 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         college,
         devyClass: db?.devyClass || null,
         devyKtcValue: db?.devyKtcValue || 0,
+        devyKtcRank: db?.devyKtcRank || null,
         ktcValue: db?.ktcValue || 0,
         fantasyProsValue: db?.fantasyProsValue || 0,
         fantasyProsRank: db?.fantasyProsRank || null,
         dasScore: db?.dasScore || null,
+        sheetRank: db?.sheetRank || null,
+        sheetRating: db?.sheetRating || null,
+        sheetAvgOvrRank: db?.sheetAvgOvrRank || null,
+        sheetVsKtcDelta: (db?.sheetRank && db?.devyKtcRank) ? (db.devyKtcRank - db.sheetRank) : null,
         ownerId: owner.ownerId || null,
         ownerUsername: owner.username || null,
         onTaxi: !!owner.onTaxi,
@@ -875,6 +967,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const sp = sleeperPlayerMap[id] || {};
       const name = sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
       const owner = idToRoster[id];
+      if (!positionAllowed(sp.position || '?')) continue;
       graduatedList.push({
         sleeperId: id,
         name,
@@ -906,6 +999,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         // Skip if Sleeper says this player now has an NFL team (graduated)
         if (hasSleeperRecord && sp.team) return null;
 
+        if (!positionAllowed(p.position)) return null;
+
         return {
           sleeperId: p.sleeperId || null,
           name: p.name,
@@ -913,16 +1008,32 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
           college: p.college || sp.college || null,
           devyClass: p.devyClass || null,
           devyKtcValue: p.devyKtcValue || 0,
+          devyKtcRank: p.devyKtcRank || null,
           ktcValue: p.ktcValue || 0,
           fantasyProsValue: p.fantasyProsValue || 0,
           fantasyProsRank: p.fantasyProsRank || null,
           dasScore: p.dasScore || null,
+          sheetRank: p.sheetRank || null,
+          sheetRating: p.sheetRating || null,
+          sheetAvgOvrRank: p.sheetAvgOvrRank || null,
+          sheetVsKtcDelta: (p.sheetRank && p.devyKtcRank) ? (p.devyKtcRank - p.sheetRank) : null,
           fpEquivalent: fpEquivalentValue(p, true),
         };
       })
       .filter(Boolean)
-      // Sort: devyKtcValue desc, then ktcValue, then fantasyProsValue
       .sort((a, b) => {
+        const aSheet = Number.isFinite(a.sheetRank) ? a.sheetRank : null;
+        const bSheet = Number.isFinite(b.sheetRank) ? b.sheetRank : null;
+        if (aSheet != null && bSheet != null && aSheet !== bSheet) return aSheet - bSheet;
+        if (aSheet != null && bSheet == null) return -1;
+        if (aSheet == null && bSheet != null) return 1;
+
+        const aKtcRank = Number.isFinite(a.devyKtcRank) ? a.devyKtcRank : null;
+        const bKtcRank = Number.isFinite(b.devyKtcRank) ? b.devyKtcRank : null;
+        if (aKtcRank != null && bKtcRank != null && aKtcRank !== bKtcRank) return aKtcRank - bKtcRank;
+        if (aKtcRank != null && bKtcRank == null) return -1;
+        if (aKtcRank == null && bKtcRank != null) return 1;
+
         const aVal = a.devyKtcValue || a.ktcValue || 0;
         const bVal = b.devyKtcValue || b.ktcValue || 0;
         return bVal - aVal;
@@ -940,7 +1051,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       .select('sleeperId name position team college nflDraftYear fantasyProsValue fantasyProsRank ktcValue ktcRank underdogAdp dasScore isRookie')
       .lean();
 
-    const availableRookies = rookieDbPlayers
+    const availableRookies = (devyEnabled ? rookieDbPlayers : [])
       .filter((p) => {
         // If tied to a Sleeper ID and already rostered/taxi, it's not available in this league.
         if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
@@ -994,6 +1105,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       const sp = sleeperPlayerMap[id] || {};
       const owner = idToRoster[id] || {};
       const name = sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim() || id;
+      if (!positionAllowed(sp.position || '?')) return null;
       return {
         sleeperId: id,
         name,
@@ -1010,12 +1122,14 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         onTaxi: !!owner.onTaxi,
         inOurDb: false,
       };
-    });
+    }).filter(Boolean);
 
     res.json({
       leagueId,
       leagueName: league.name,
-      isDevyLeague: /devy/i.test(league.name || ''),
+      isDevyLeague: devyEnabled,
+      isIdpLeague: idpEnabled,
+      positionFilters,
       rostered: rosterList,
       unknown: unknownPlayers,   // devy players Sleeper knows about but we haven't imported yet
       graduated: graduatedList,  // recently NFL-drafted — were in devy pool

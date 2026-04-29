@@ -9,8 +9,61 @@ import ScoutingHub from '../components/ScoutingHub/ScoutingHub';
 import DevyPool from '../components/DevyPool/DevyPool';
 import { formatEta } from '../utils/formatting';
 
+function LeagueFeatureToggle({ label, checked, disabled, onChange }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!disabled) onChange(!checked);
+      }}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.45rem',
+        background: 'transparent',
+        border: 'none',
+        color: 'var(--text-primary)',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.65 : 1,
+        padding: 0,
+      }}
+    >
+      <span style={{ fontSize: '0.72rem', fontWeight: 600 }}>{label}</span>
+      <span
+        style={{
+          width: 34,
+          height: 20,
+          borderRadius: 999,
+          background: checked ? 'var(--accent, #6366f1)' : 'var(--bg-secondary)',
+          border: '1px solid var(--border)',
+          position: 'relative',
+          transition: 'background 160ms ease',
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            top: 1,
+            left: checked ? 16 : 1,
+            width: 16,
+            height: 16,
+            borderRadius: '50%',
+            background: '#fff',
+            transition: 'left 160ms ease',
+          }}
+        />
+      </span>
+    </button>
+  );
+}
+
 export default function Dashboard() {
-  const { user, leagues, loadingLeagues } = useApp();
+  const { user, leagues, loadingLeagues, updateLeaguePreferences } = useApp();
   const navigate = useNavigate();
   const [activeDrafts, setActiveDrafts] = useState([]);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
@@ -18,6 +71,8 @@ export default function Dashboard() {
   const [learning, setLearning] = useState(false);
   const [learnMsg, setLearnMsg] = useState(null);
   const [expandedLeague, setExpandedLeague] = useState(null);
+  const [savingLeaguePrefs, setSavingLeaguePrefs] = useState({});
+  const [leaguePrefErrors, setLeaguePrefErrors] = useState({});
 
   useEffect(() => {
     getActiveDrafts()
@@ -42,6 +97,21 @@ export default function Dashboard() {
       setLearnMsg('Scout failed -- check Render logs');
     } finally {
       setLearning(false);
+    }
+  };
+
+  const handleLeaguePreferenceChange = async (leagueId, key, value) => {
+    setSavingLeaguePrefs((current) => ({ ...current, [leagueId]: true }));
+    setLeaguePrefErrors((current) => ({ ...current, [leagueId]: null }));
+    try {
+      await updateLeaguePreferences(leagueId, { [key]: value });
+    } catch {
+      setLeaguePrefErrors((current) => ({
+        ...current,
+        [leagueId]: 'Could not save league settings right now.',
+      }));
+    } finally {
+      setSavingLeaguePrefs((current) => ({ ...current, [leagueId]: false }));
     }
   };
 
@@ -124,7 +194,11 @@ export default function Dashboard() {
                       <div className="flex justify-between items-center" style={{ marginBottom: '0.4rem' }}>
                         <div>
                           <div className="font-semibold league-title">{lg.name}</div>
-                          <div className="text-xs text-secondary">{lg.totalRosters}-team{lg.isSuperFlex ? ' SuperFlex' : ''}{lg.isPpr ? ' PPR' : ''}</div>
+                          <div className="text-xs text-secondary">
+                            {lg.totalRosters}-team{lg.isSuperFlex ? ' SuperFlex' : ''}{lg.isPpr ? ' PPR' : ''}
+                            {lg.devyEnabled ? ' · Devy' : ''}
+                            {lg.idpEnabled ? ' · IDP' : ''}
+                          </div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
                           {lg.myRoster?.winWindowLabel && (
@@ -162,12 +236,36 @@ export default function Dashboard() {
                           border: '1px solid var(--border, #2a2a3e)',
                         }}
                       >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.85rem' }}>
+                          <div>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>League Format</div>
+                            <div className="text-xs text-muted">Saved per league and restored on your next login.</div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.9rem', flexWrap: 'wrap' }}>
+                            <LeagueFeatureToggle
+                              label="Devy"
+                              checked={!!lg.devyEnabled}
+                              disabled={!!savingLeaguePrefs[lg.leagueId]}
+                              onChange={(nextValue) => handleLeaguePreferenceChange(lg.leagueId, 'devyEnabled', nextValue)}
+                            />
+                            <LeagueFeatureToggle
+                              label="IDP"
+                              checked={!!lg.idpEnabled}
+                              disabled={!!savingLeaguePrefs[lg.leagueId]}
+                              onChange={(nextValue) => handleLeaguePreferenceChange(lg.leagueId, 'idpEnabled', nextValue)}
+                            />
+                          </div>
+                        </div>
+                        {leaguePrefErrors[lg.leagueId] && (
+                          <div className="text-xs" style={{ color: 'var(--red)', marginBottom: '0.75rem' }}>
+                            {leaguePrefErrors[lg.leagueId]}
+                          </div>
+                        )}
                         <DraftTargets leagueId={lg.leagueId} draftId={lg.draftId} />
                       </div>
                     )}
 
-                    {/* Devy pool panel — only for leagues with "devy" in the name */}
-                    {isExpanded && /devy/i.test(lg.name || '') && (
+                    {(isExpanded && (lg.devyEnabled || lg.idpEnabled)) && (
                       <div
                         style={{
                           marginTop: '0.5rem',

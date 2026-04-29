@@ -1,7 +1,8 @@
 /**
  * Google Sheets devy scraper
  * Fetches the publicly shared devy rankings sheet (CSV export) and returns
- * skill-position prospects only.
+ * every ranked prospect row so offensive devy and IDP leagues can share one
+ * source of truth.
  *
  * Sheet columns: Rank, Player, Position, Forty, AvgPosRank, AvgOvrRank, Rating
  */
@@ -10,8 +11,6 @@ const axios = require('axios');
 
 const SHEET_CSV_URL =
   'https://docs.google.com/spreadsheets/d/1BCju7HvBz-SUce6ge9DHUYdvSTB1T2LKUd8BahDncW8/export?format=csv&gid=0';
-
-const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
 
 /**
  * Parses a raw CSV string into an array of row objects.
@@ -65,10 +64,8 @@ async function fetchDevyRankingsSheet() {
 
   for (const row of rows) {
     const position = (row['position'] || '').trim().toUpperCase();
-    if (!SKILL_POSITIONS.has(position)) continue;
-
     const rankRaw = parseInt(row['rank'], 10);
-    if (!row['player'] || isNaN(rankRaw)) continue;
+    if (!row['player'] || !position || isNaN(rankRaw)) continue;
 
     players.push({
       name: row['player'].trim(),

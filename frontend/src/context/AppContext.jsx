@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getMe, login as apiLogin, logout as apiLogout, getLeagues } from '../services/api';
+import { getMe, login as apiLogin, logout as apiLogout, getLeagues, updateLeaguePreferences as apiUpdateLeaguePreferences } from '../services/api';
 
 const AppContext = createContext(null);
 
@@ -77,8 +77,22 @@ export function AppProvider({ children }) {
     }
   }, []);
 
+  const updateLeaguePreferences = useCallback(async (leagueId, updates) => {
+    const response = await apiUpdateLeaguePreferences(leagueId, updates);
+    setLeagues((current) => current.map((league) => (
+      league.leagueId === leagueId
+        ? {
+            ...league,
+            ...(typeof response.devyEnabled === 'boolean' ? { devyEnabled: response.devyEnabled } : {}),
+            ...(typeof response.idpEnabled === 'boolean' ? { idpEnabled: response.idpEnabled } : {}),
+          }
+        : league
+    )));
+    return response;
+  }, []);
+
   return (
-    <AppContext.Provider value={{ user, leagues, loadingUser, loadingLeagues, error, login, logout, refreshLeagues }}>
+    <AppContext.Provider value={{ user, leagues, loadingUser, loadingLeagues, error, login, logout, refreshLeagues, updateLeaguePreferences }}>
       {children}
     </AppContext.Provider>
   );

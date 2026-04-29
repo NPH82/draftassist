@@ -36,6 +36,8 @@ const leagueSchema = new mongoose.Schema({
   rosterPositions: [String],
   isSuperFlex: Boolean,
   isPpr: Boolean,
+  devyEnabled: { type: Boolean, default: false },
+  idpEnabled: { type: Boolean, default: false },
 
   // Draft
   draftId: String,

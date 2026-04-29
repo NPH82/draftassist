@@ -27,6 +27,7 @@ export const getLeagues = (year, options = {}) => {
   return api.get('/leagues', { params, timeout: 60000 }).then(r => r.data);
 };
 export const getLeague = (id) => api.get(`/leagues/${id}`).then(r => r.data);
+export const updateLeaguePreferences = (id, data) => api.post(`/leagues/${id}/preferences`, data).then(r => r.data);
 export const getLeagueAlerts = (id, days = 30) => api.get(`/leagues/${id}/alerts`, { params: { days } }).then(r => r.data);
 export const getLeagueDraftTargets = (id) => api.get(`/leagues/${id}/draft-targets`).then(r => r.data);
 export const getDevyPool = (id) => api.get(`/leagues/${id}/devy-pool`).then(r => r.data);

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getDevyPool } from '../../services/api';
 
-const POSITIONS = ['ALL', 'QB', 'RB', 'WR', 'TE'];
 const SKILL_POSITIONS = ['QB', 'RB', 'WR', 'TE'];
 
 // Sort devy player by best available value signal
@@ -11,6 +10,16 @@ function devyValue(p) {
 
 function fpEq(p) {
   return p?.fpEquivalent || 0;
+}
+
+function sheetVsKtcLabel(player) {
+  const labels = [];
+  if (player.sheetRank) labels.push(`Sheet #${player.sheetRank}`);
+  if (player.devyKtcRank) labels.push(`KTC #${player.devyKtcRank}`);
+  if (player.sheetVsKtcDelta === 0) labels.push('Aligned');
+  if (player.sheetVsKtcDelta > 0) labels.push(`KTC ${player.sheetVsKtcDelta} spots lower`);
+  if (player.sheetVsKtcDelta < 0) labels.push(`KTC ${Math.abs(player.sheetVsKtcDelta)} spots higher`);
+  return labels.join(' · ');
 }
 
 function DevyPlayerRow({ player, showOwner }) {
@@ -57,6 +66,11 @@ function DevyPlayerRow({ player, showOwner }) {
             <span style={{ color: 'var(--red, #ef4444)', marginLeft: '0.4rem' }}>⚠ not in DB</span>
           )}
         </div>
+        {sheetVsKtcLabel(player) && (
+          <div style={{ fontSize: '0.64rem', color: 'var(--yellow)', marginTop: '0.12rem' }}>
+            {sheetVsKtcLabel(player)}
+          </div>
+        )}
       </div>
 
       <div style={{ textAlign: 'right', fontSize: '0.7rem' }}>
@@ -163,14 +177,23 @@ export default function DevyPool({ leagueId }) {
   if (error) return <div className="text-xs" style={{ color: 'var(--red)', padding: '0.5rem' }}>{error}</div>;
   if (!data) return null;
 
+  const positionOptions = ['ALL', ...(data.positionFilters || SKILL_POSITIONS)];
   const filterPos = (players) =>
     posFilter === 'ALL' ? players : players.filter(p => p.position === posFilter);
 
   const available = filterPos(data.available || []);
   const rostered  = filterPos(data.rostered || []);
-  const graduated = data.graduated || [];
-  const unknown   = data.unknown || [];
+  const graduated = filterPos(data.graduated || []);
+  const unknown   = filterPos(data.unknown || []);
   const availableRookies = filterPos(data.availableRookies || []);
+  const comparableAvailable = available.filter((player) => SKILL_POSITIONS.includes(player.position));
+  const comparableRookies = availableRookies.filter((player) => SKILL_POSITIONS.includes(player.position));
+  const tabs = data.isDevyLeague ? ['available', 'rostered', 'graduated', 'compare'] : ['available', 'rostered', 'graduated'];
+  const poolTitle = data.isDevyLeague && data.isIdpLeague
+    ? 'Devy / IDP Pool'
+    : data.isIdpLeague
+      ? 'IDP Prospect Pool'
+      : 'Devy Pool';
 
   const buildComparisonRows = (devyList, rookieList, limit = 15) =>
     devyList.slice(0, limit).map((devy, idx) => {
@@ -183,8 +206,8 @@ export default function DevyPool({ leagueId }) {
     });
 
   const comparisonRows = compareMode === 'overall'
-    ? buildComparisonRows(available, availableRookies)
-    : (posFilter === 'ALL' ? [] : buildComparisonRows(available, availableRookies));
+    ? buildComparisonRows(comparableAvailable, comparableRookies)
+    : (posFilter === 'ALL' ? [] : buildComparisonRows(comparableAvailable, comparableRookies));
 
   const groupedPositionRows = SKILL_POSITIONS.map((pos) => {
     const devyPos = (data.available || []).filter(p => p.position === pos);
@@ -210,16 +233,16 @@ export default function DevyPool({ leagueId }) {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
         <div className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
-          🎓 Devy Pool
+          🎓 {poolTitle}
         </div>
         <div className="text-xs text-muted">
-          {data.counts.rostered} rostered · {data.counts.available} devy available · {data.counts.availableRookies || 0} rookie available
+          {data.counts.rostered} rostered · {data.counts.available} available · {data.counts.availableRookies || 0} rookie available
         </div>
       </div>
 
       {/* Position filter */}
       <div className="flex gap-1" style={{ marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-        {POSITIONS.map(pos => (
+        {positionOptions.map(pos => (
           <button
             key={pos}
             className={`toggle-btn${posFilter === pos ? ' active' : ''}`}
@@ -233,7 +256,7 @@ export default function DevyPool({ leagueId }) {
 
       {/* Tab switcher */}
       <div className="flex gap-1" style={{ marginBottom: '0.5rem' }}>
-        {['available', 'rostered', 'graduated', 'compare'].map(key => (
+        {tabs.map(key => (
           <button
             key={key}
             onClick={() => setTab(key)}
@@ -258,8 +281,8 @@ export default function DevyPool({ leagueId }) {
         <div>
           {available.length === 0 ? (
             <div className="text-xs text-muted" style={{ padding: '0.5rem 0' }}>
-              No available devy players found.{' '}
-              {data.counts.available === 0 && 'Run "Import Devy Players" from the admin panel to seed the pool.'}
+              No available prospects found.{' '}
+              {data.counts.available === 0 && 'Run the devy rankings sync to seed the pool from the spreadsheet and KTC.'}
             </div>
           ) : (
             available.map(p => <DevyPlayerRow key={p.sleeperId} player={p} showOwner={false} />)
