@@ -34,6 +34,8 @@ function DraftModeInner({ draftId }) {
 
   const ds = draftState;
   const leagueId = ds?.leagueId || null;
+  const isDraftComplete = ['complete', 'completed'].includes(String(ds?.status || '').toLowerCase());
+  const myGrade = ds?.myDraftGrade?.grade || null;
 
   const handleLoadHintTrades = useCallback(async () => {
     if (!draftId || !ds?.strategyHint?.playerId) return;
@@ -102,12 +104,18 @@ function DraftModeInner({ draftId }) {
               </div>
             )}
             <div className="font-bold" style={{ fontSize: '1.1rem' }}>
-              {ds?.onTheClock
+              {isDraftComplete
+                ? `Draft complete${myGrade ? ` • Grade ${myGrade}` : ''}`
+                : ds?.onTheClock
                 ? <span className="text-green">On the Clock!</span>
                 : `Your pick: ${formatEta(ds?.myNextPickEta)}`}
             </div>
             <div className="text-xs text-secondary">
-              Pick {ds?.currentPick} -- Next yours: #{ds?.myNextPick}
+              {isDraftComplete
+                ? (ds?.myDraftGrade
+                    ? `League rank: #${ds.myDraftGrade.rank} of ${ds?.draftGrades?.managers?.length || 0}`
+                    : 'Draft grades are based on ADP value versus league median (C).')
+                : `Pick ${ds?.currentPick} -- Next yours: #${ds?.myNextPick}`}
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
@@ -116,36 +124,75 @@ function DraftModeInner({ draftId }) {
           </div>
         </div>
 
-        {/* Mode toggle */}
-        <div className="flex gap-2 items-center" style={{ flexWrap: 'wrap' }}>
-          <div className="toggle-group">
-            <button className={`toggle-btn ${mode === 'team_need' ? 'active' : ''}`} onClick={() => setMode('team_need')}>
-              Team Need
-            </button>
-            <button className={`toggle-btn ${mode === 'bpa' ? 'active' : ''}`} onClick={() => setMode('bpa')}>
-              BPA
-            </button>
-          </div>
+        {!isDraftComplete && (
+          <div className="flex gap-2 items-center" style={{ flexWrap: 'wrap' }}>
+            <div className="toggle-group">
+              <button className={`toggle-btn ${mode === 'team_need' ? 'active' : ''}`} onClick={() => setMode('team_need')}>
+                Team Need
+              </button>
+              <button className={`toggle-btn ${mode === 'bpa' ? 'active' : ''}`} onClick={() => setMode('bpa')}>
+                BPA
+              </button>
+            </div>
 
-          <button
-            className={`btn ${showQueue ? 'btn-primary' : 'btn-secondary'} text-sm`}
-            style={{ padding: '0.3rem 0.7rem' }}
-            onClick={() => setShowQueue(q => !q)}
-          >
-            Queue {queue.length > 0 ? `(${queue.length})` : ''}
-          </button>
-
-          {leagueId && (
             <button
-              className={`btn ${showTargets ? 'btn-primary' : 'btn-secondary'} text-sm`}
+              className={`btn ${showQueue ? 'btn-primary' : 'btn-secondary'} text-sm`}
               style={{ padding: '0.3rem 0.7rem' }}
-              onClick={() => setShowTargets(t => !t)}
+              onClick={() => setShowQueue(q => !q)}
             >
-              {showTargets ? '▲ Targets' : '▼ Targets'}
+              Queue {queue.length > 0 ? `(${queue.length})` : ''}
             </button>
-          )}
-        </div>
+
+            {leagueId && (
+              <button
+                className={`btn ${showTargets ? 'btn-primary' : 'btn-secondary'} text-sm`}
+                style={{ padding: '0.3rem 0.7rem' }}
+                onClick={() => setShowTargets(t => !t)}
+              >
+                {showTargets ? '▲ Targets' : '▼ Targets'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
+      {isDraftComplete && ds?.draftGrades?.managers?.length > 0 && (
+        <div className="card" style={{ marginBottom: '1rem', padding: '0.75rem' }}>
+          <div className="font-semibold" style={{ marginBottom: '0.45rem' }}>Draft Grades</div>
+          <div className="text-xs text-secondary" style={{ marginBottom: '0.45rem' }}>
+            C is league median. Higher grades indicate drafting players later than consensus ADP.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            {ds.draftGrades.managers.map((mgr) => {
+              const isMine = mgr.ownerId === ds?.myDraftGrade?.ownerId;
+              return (
+                <div
+                  key={mgr.ownerId}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.45rem 0.55rem',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: isMine ? 'rgba(34,197,94,0.08)' : 'transparent',
+                  }}
+                >
+                  <div className="text-sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    #{mgr.rank} {mgr.ownerUsername}{isMine ? ' (You)' : ''}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                    <span className="badge">{mgr.grade}</span>
+                    <span className="text-xs text-secondary">
+                      {mgr.avgPickDelta == null ? 'No ADP comps' : `${mgr.avgPickDelta > 0 ? '+' : ''}${mgr.avgPickDelta} vs ADP`}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Strategy hint: trade-back or trade-up alert */}
       {ds?.strategyHint && (

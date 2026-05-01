@@ -112,6 +112,193 @@ function marketRankSignal(player = {}, fallbackRank = 999) {
   return fallbackRank;
 }
 
+function isCompletedDraftStatus(status) {
+  const s = String(status || '').toLowerCase();
+  return s === 'complete' || s === 'completed';
+}
+
+function round2(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function median(values = []) {
+  if (!values.length) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) return (sorted[mid - 1] + sorted[mid]) / 2;
+  return sorted[mid];
+}
+
+function stdDev(values = []) {
+  if (!values.length) return 0;
+  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const variance = values.reduce((sum, v) => sum + ((v - mean) ** 2), 0) / values.length;
+  return Math.sqrt(Math.max(variance, 0));
+}
+
+function gradeFromZScore(z) {
+  if (z >= 1.8) return 'A+';
+  if (z >= 1.4) return 'A';
+  if (z >= 1.1) return 'A-';
+  if (z >= 0.8) return 'B+';
+  if (z >= 0.5) return 'B';
+  if (z >= 0.25) return 'B-';
+  if (z >= 0.1) return 'C+';
+  if (z > -0.1) return 'C';
+  if (z >= -0.35) return 'C-';
+  if (z >= -0.65) return 'D+';
+  if (z >= -0.95) return 'D';
+  if (z >= -1.25) return 'D-';
+  return 'F';
+}
+
+function consensusAdpSignalForGrading(player = {}, { rookieDraft = false } = {}) {
+  const rookieObserved = Number(player.sleeperRookieObservedAdp || 0);
+  const observed = Number(player.sleeperObservedAdp || 0);
+  const expected = Number(player.expectedAdp || 0);
+  const adp = Number(player.underdogAdp || 0);
+  const fp = Number(player.fantasyProsRank || 0);
+
+  // Prefer Sleeper-derived ADP signals for post-draft grading.
+  if (rookieDraft && rookieObserved > 0) return rookieObserved;
+  if (observed > 0) return observed;
+  if (expected > 0) return expected;
+  if (adp > 0) return adp;
+  if (fp > 0) return fp;
+  return null;
+}
+
+function computeCompletedDraftGrades({
+  draftData,
+  picks,
+  rosters,
+  userMap,
+  playerBySleeperId,
+}) {
+  const rookieDraft = isRookieDraftContext(draftData, {});
+  const ownerByRosterId = Object.fromEntries((rosters || []).map((r) => [String(r.roster_id), r.owner_id]));
+
+  const managerIds = new Set();
+  for (const ownerId of Object.keys(draftData?.draft_order || {})) managerIds.add(ownerId);
+  for (const r of (rosters || [])) {
+    if (r?.owner_id) managerIds.add(r.owner_id);
+  }
+
+  const byManager = {};
+  for (const managerId of managerIds) {
+    byManager[managerId] = {
+      ownerId: managerId,
+      ownerUsername: userMap?.[managerId]?.username || managerId,
+      picks: 0,
+      picksWithConsensus: 0,
+      weightedScoreSum: 0,
+      weightSum: 0,
+      deltaSum: 0,
+    };
+  }
+
+  for (let i = 0; i < (picks || []).length; i += 1) {
+    const pick = picks[i] || {};
+    const playerId = String(pick.player_id || '').trim();
+    if (!playerId) continue;
+
+    const ownerId = pick.picked_by || ownerByRosterId[String(pick.roster_id || '')];
+    if (!ownerId) continue;
+    if (!byManager[ownerId]) {
+      byManager[ownerId] = {
+        ownerId,
+        ownerUsername: userMap?.[ownerId]?.username || ownerId,
+        picks: 0,
+        picksWithConsensus: 0,
+        weightedScoreSum: 0,
+        weightSum: 0,
+        deltaSum: 0,
+      };
+    }
+
+    byManager[ownerId].picks += 1;
+
+    const player = playerBySleeperId[playerId];
+    if (!player) continue;
+
+    const consensusAdp = consensusAdpSignalForGrading(player, { rookieDraft });
+    if (!(consensusAdp > 0)) continue;
+
+    const actualPick = Number(pick.pick_no || (i + 1));
+    if (!(actualPick > 0)) continue;
+
+    // Positive delta means value (picked later than consensus), negative means a reach.
+    const delta = consensusAdp - actualPick;
+    const scale = Math.max(6, consensusAdp * 0.16);
+    let normalized = delta / scale;
+    if (normalized < 0) normalized *= 0.8; // So reaches hurt, but only slightly.
+
+    // Earlier rounds carry more impact than late dart throws.
+    const weight = 1 / Math.sqrt(actualPick);
+
+    byManager[ownerId].picksWithConsensus += 1;
+    byManager[ownerId].weightedScoreSum += normalized * weight;
+    byManager[ownerId].weightSum += weight;
+    byManager[ownerId].deltaSum += delta;
+  }
+
+  const baseRows = Object.values(byManager).map((m) => {
+    const rawScore = m.weightSum > 0 ? (m.weightedScoreSum / m.weightSum) : null;
+    const avgPickDelta = m.picksWithConsensus > 0 ? (m.deltaSum / m.picksWithConsensus) : null;
+    return {
+      ownerId: m.ownerId,
+      ownerUsername: m.ownerUsername,
+      picks: m.picks,
+      picksWithConsensus: m.picksWithConsensus,
+      avgPickDelta: avgPickDelta == null ? null : round2(avgPickDelta),
+      rawScore,
+    };
+  });
+
+  const validRaw = baseRows.map((r) => r.rawScore).filter((v) => Number.isFinite(v));
+  const med = median(validRaw);
+  const spread = Math.max(0.12, stdDev(validRaw));
+
+  const graded = baseRows.map((row) => {
+    if (!Number.isFinite(row.rawScore)) {
+      return {
+        ...row,
+        rawScore: null,
+        zScore: null,
+        grade: 'C',
+      };
+    }
+    const z = (row.rawScore - med) / spread;
+    return {
+      ...row,
+      rawScore: round2(row.rawScore),
+      zScore: round2(z),
+      grade: gradeFromZScore(z),
+    };
+  });
+
+  graded.sort((a, b) => {
+    const az = Number.isFinite(a.zScore) ? a.zScore : -999;
+    const bz = Number.isFinite(b.zScore) ? b.zScore : -999;
+    if (bz !== az) return bz - az;
+    return (a.ownerUsername || '').localeCompare(b.ownerUsername || '');
+  });
+
+  for (let i = 0; i < graded.length; i += 1) {
+    graded[i].rank = i + 1;
+  }
+
+  return {
+    managers: graded,
+    baseline: {
+      medianRawScore: round2(med),
+      spread: round2(spread),
+      medianGrade: 'C',
+      note: 'Positive avgPickDelta means manager drafted players later than consensus ADP (better value).',
+    },
+  };
+}
+
 function currentRoundForPick(pickNumber, totalRosters) {
   return Math.max(1, Math.ceil((Number(pickNumber || 1)) / Math.max(1, Number(totalRosters || 12))));
 }
@@ -519,6 +706,61 @@ router.get('/:draftId', requireAuth, async (req, res) => {
       effectiveRosters.flatMap(r => [...(r.allPlayerIds || []), ...(r.playerIds || [])])
     );
     const totalRosters = draftData.settings?.teams || 12;
+
+    if (isCompletedDraftStatus(draftData.status)) {
+      const leagueId = league?.sleeperId || draftData?.league_id || null;
+      let userMap = {};
+      if (leagueId) {
+        try {
+          userMap = await sleeperService.buildUserMap(leagueId);
+        } catch (e) {
+          console.warn('[Draft] Completed draft user map lookup failed:', e.message);
+        }
+      }
+
+      const gradingRosters = effectiveRosters.length
+        ? effectiveRosters.map((r) => ({ roster_id: r.rosterId, owner_id: r.ownerId }))
+        : (liveRosters || []);
+
+      const pickedPlayerIds = [...new Set((picks || []).map((p) => p.player_id).filter(Boolean))];
+      const pickedPlayers = pickedPlayerIds.length
+        ? await Player.find({ sleeperId: { $in: pickedPlayerIds } })
+          .select('sleeperId sleeperObservedAdp sleeperRookieObservedAdp expectedAdp underdogAdp fantasyProsRank')
+          .lean()
+        : [];
+      const playerBySleeperId = Object.fromEntries(
+        pickedPlayers.map((p) => [String(p.sleeperId), p])
+      );
+
+      const draftGrades = computeCompletedDraftGrades({
+        draftData,
+        picks,
+        rosters: gradingRosters,
+        userMap,
+        playerBySleeperId,
+      });
+      const myDraftGrade = draftGrades.managers.find((m) => m.ownerId === sleeperId) || null;
+
+      return res.json({
+        draftId,
+        leagueId,
+        leagueName: league?.name || draftData.metadata?.name || null,
+        status: draftData.status,
+        currentPick: picks.length,
+        myNextPick: null,
+        onTheClock: false,
+        mode,
+        available: [],
+        recommended: [],
+        strategyHint: null,
+        recentPicks: picks.slice(-5).reverse(),
+        fallerAlerts: [],
+        positionalNeeds: null,
+        winWindow: null,
+        myDraftGrade,
+        draftGrades,
+      });
+    }
 
     // No recommendations for 32-team leagues — return board-only state
     if (totalRosters >= 32) {
