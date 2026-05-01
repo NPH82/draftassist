@@ -32,6 +32,7 @@ export const getLeagueAlerts = (id, days = 30) => api.get(`/leagues/${id}/alerts
 export const getLeagueDraftTargets = (id) => api.get(`/leagues/${id}/draft-targets`).then(r => r.data);
 export const getDevyPool = (id) => api.get(`/leagues/${id}/devy-pool`).then(r => r.data);
 export const submitDraftFeedback = (id, data) => api.post(`/leagues/${id}/draft-feedback`, data).then(r => r.data);
+export const getLeagueDraftGrade = (id) => api.get(`/leagues/${id}/draft-grade`).then(r => r.data);
 
 // Players
 export const getPlayers = (params) => api.get('/players', { params }).then(r => r.data);

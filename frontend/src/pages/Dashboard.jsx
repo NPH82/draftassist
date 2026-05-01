@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { getActiveDrafts, triggerLearn } from '../services/api';
+import { getActiveDrafts, triggerLearn, getLeagueDraftGrade } from '../services/api';
 import Layout from '../components/Layout/Layout';
 import WinWindowBadge from '../components/WinWindow/WinWindowBadge';
 import DraftTargets from '../components/DraftTargets/DraftTargets';
@@ -62,6 +62,96 @@ function LeagueFeatureToggle({ label, checked, disabled, onChange }) {
   );
 }
 
+const GRADE_COLOR = {
+  'A+': '#86efac', A: '#86efac', 'A-': '#86efac',
+  'B+': '#6ee7b7', B: '#6ee7b7', 'B-': '#6ee7b7',
+  'C+': '#93c5fd', C: '#93c5fd', 'C-': '#93c5fd',
+  'D+': '#fbbf24', D: '#fbbf24', 'D-': '#fbbf24',
+  F: '#f87171',
+};
+
+function CompletedDraftGradePanel({ data }) {
+  if (!data?.myGrade) {
+    return (
+      <div className="text-xs text-secondary" style={{ padding: '0.5rem 0' }}>
+        Draft complete. No grade available (ADP data may be limited for this draft type).
+      </div>
+    );
+  }
+  const { myGrade, totalManagers, targetsHit, targetsTotal } = data;
+  const color = GRADE_COLOR[myGrade.grade] || '#93c5fd';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+      <div className="font-semibold" style={{ fontSize: '0.92rem' }}>Draft Grade</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        <span
+          style={{
+            fontSize: '2rem',
+            fontWeight: 800,
+            color,
+            lineHeight: 1,
+          }}
+        >
+          {myGrade.grade}
+        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+          <span className="text-sm">
+            League rank: <strong>#{myGrade.rank}</strong> of {totalManagers}
+          </span>
+          {myGrade.avgPickDelta != null && (
+            <span className="text-xs text-secondary">
+              {myGrade.avgPickDelta > 0 ? '+' : ''}{myGrade.avgPickDelta} picks vs ADP avg
+            </span>
+          )}
+          {targetsTotal > 0 && (
+            <span className="text-xs text-secondary">
+              Targets drafted: {targetsHit} / {targetsTotal}
+            </span>
+          )}
+        </div>
+      </div>
+      {data.leagueGrades?.length > 1 && (
+        <details style={{ marginTop: '0.25rem' }}>
+          <summary className="text-xs text-secondary" style={{ cursor: 'pointer', userSelect: 'none' }}>
+            View all grades
+          </summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.45rem' }}>
+            {data.leagueGrades.map((mgr) => {
+              const isMine = mgr.ownerId === data.myGrade?.ownerId;
+              const mc = GRADE_COLOR[mgr.grade] || '#93c5fd';
+              return (
+                <div
+                  key={mgr.ownerId}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.3rem 0.5rem',
+                    borderRadius: 6,
+                    background: isMine ? 'rgba(34,197,94,0.08)' : 'transparent',
+                  }}
+                >
+                  <span className="text-xs" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    #{mgr.rank} {mgr.ownerUsername}{isMine ? ' (You)' : ''}
+                  </span>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.8rem', color: mc }}>{mgr.grade}</span>
+                    {mgr.avgPickDelta != null && (
+                      <span className="text-xs text-muted">
+                        {mgr.avgPickDelta > 0 ? '+' : ''}{mgr.avgPickDelta}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { user, leagues, loadingLeagues, updateLeaguePreferences } = useApp();
   const navigate = useNavigate();
@@ -73,6 +163,7 @@ export default function Dashboard() {
   const [expandedLeague, setExpandedLeague] = useState(null);
   const [savingLeaguePrefs, setSavingLeaguePrefs] = useState({});
   const [leaguePrefErrors, setLeaguePrefErrors] = useState({});
+  const [draftGrades, setDraftGrades] = useState({});
 
   useEffect(() => {
     getActiveDrafts()
@@ -99,6 +190,18 @@ export default function Dashboard() {
       setLearning(false);
     }
   };
+
+  // Fetch completed draft grade when a league card is expanded
+  useEffect(() => {
+    if (!expandedLeague) return;
+    const lg = leagues.find((l) => l.leagueId === expandedLeague);
+    if (!lg?.draftId) return;
+    // Only fetch once per leagueId
+    if (draftGrades[expandedLeague] !== undefined) return;
+    getLeagueDraftGrade(expandedLeague)
+      .then((data) => setDraftGrades((prev) => ({ ...prev, [expandedLeague]: data })))
+      .catch(() => setDraftGrades((prev) => ({ ...prev, [expandedLeague]: null })));
+  }, [expandedLeague, leagues]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLeaguePreferenceChange = async (leagueId, key, value) => {
     setSavingLeaguePrefs((current) => ({ ...current, [leagueId]: true }));
@@ -263,7 +366,11 @@ export default function Dashboard() {
                             {leaguePrefErrors[lg.leagueId]}
                           </div>
                         )}
-                        <DraftTargets leagueId={lg.leagueId} draftId={lg.draftId} />
+                        {draftGrades[lg.leagueId]?.complete ? (
+                          <CompletedDraftGradePanel data={draftGrades[lg.leagueId]} />
+                        ) : (
+                          <DraftTargets leagueId={lg.leagueId} draftId={lg.draftId} />
+                        )}
                       </div>
                     )}
 
