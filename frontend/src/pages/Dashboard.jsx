@@ -156,6 +156,8 @@ export default function Dashboard() {
                     <div style={{ textAlign: 'right' }}>
                       {d.onTheClock ? (
                         <span className="badge text-green" style={{ background: '#14532d', color: '#86efac' }}>On the Clock</span>
+                      ) : d.myNextPick == null ? (
+                        <span className="text-sm text-secondary">No picks remaining in this draft</span>
                       ) : (
                         <span className="text-sm text-secondary">Your pick in {formatEta(d.etaMs)}</span>
                       )}
