@@ -8,14 +8,31 @@ function toInt(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-function blendExpectedAdp({ sleeperObservedAdp, underdogAdp, fantasyProsRank }) {
+// Mirrors the same heuristic used in draft.js so both code paths agree.
+function isRookieDraftContext(draftData = {}) {
+  const rounds = draftData.settings?.rounds || 0;
+  const teams = draftData.settings?.teams || 12;
+  if (rounds > 0 && rounds < teams) return true;
+  const text = [draftData.metadata?.name, draftData.metadata?.description]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return /rookie|devy/.test(text);
+}
+
+function blendExpectedAdp({ sleeperRookieObservedAdp, sleeperObservedAdp, underdogAdp, fantasyProsRank }) {
+  // Rookie-draft observed ADP is the most precise signal for dynasty picks;
+  // prefer it over the full-draft average when it exists.
+  const rookieSleeper = Number(sleeperRookieObservedAdp || 0);
   const sleeper = Number(sleeperObservedAdp || 0);
   const ud = Number(underdogAdp || 0);
   const fp = Number(fantasyProsRank || 0);
 
-  if (sleeper > 0 && ud > 0) return Math.round(((sleeper * 0.65) + (ud * 0.35)) * 10) / 10;
-  if (sleeper > 0 && fp > 0) return Math.round(((sleeper * 0.75) + (fp * 0.25)) * 10) / 10;
-  if (sleeper > 0) return sleeper;
+  const primary = rookieSleeper > 0 ? rookieSleeper : sleeper;
+
+  if (primary > 0 && ud > 0) return Math.round(((primary * 0.65) + (ud * 0.35)) * 10) / 10;
+  if (primary > 0 && fp > 0) return Math.round(((primary * 0.75) + (fp * 0.25)) * 10) / 10;
+  if (primary > 0) return primary;
   if (ud > 0) return ud;
   if (fp > 0) return fp;
   return null;
@@ -57,6 +74,7 @@ async function recomputePlayerAdpFromObservations(playerSleeperIds = []) {
       : null;
     const sleeperRookieObservedAdpCount = Number(row.rookieCount || 0);
     const expectedAdp = blendExpectedAdp({
+      sleeperRookieObservedAdp,
       sleeperObservedAdp,
       underdogAdp: player.underdogAdp,
       fantasyProsRank: player.fantasyProsRank,
@@ -103,6 +121,7 @@ async function ingestCompletedDraftTrends({ leagueId, draftId, season, force = f
     ]);
 
     const draftStatus = String(draftData?.status || '').toLowerCase();
+    const isRookieDraft = isRookieDraftContext(draftData);
     if (draftStatus !== 'complete') {
       await DraftAdpIngestRun.findOneAndUpdate(
         { draftId },
@@ -162,12 +181,18 @@ async function ingestCompletedDraftTrends({ leagueId, draftId, season, force = f
 
     const pickedIds = [...new Set(pickRows.map((p) => p.playerSleeperId))];
     const playerDocs = await Player.find({ sleeperId: { $in: pickedIds } })
-      .select('sleeperId name position isRookie')
+      .select('sleeperId name position nflDraftYear')
       .lean();
     const playerById = Object.fromEntries(playerDocs.map((p) => [p.sleeperId, p]));
 
+    const draftSeason = toInt(season) || toInt(draftData?.season) || new Date().getFullYear();
+
     const ops = pickRows.map((row) => {
       const player = playerById[row.playerSleeperId] || {};
+      // A pick is treated as a rookie observation when the draft is a dedicated
+      // rookie/devy draft, OR when the player's NFL draft year matches the draft
+      // season (they are in the current rookie class in a startup/redraft context).
+      const isRookie = isRookieDraft || Number(player.nflDraftYear || 0) === draftSeason;
       return {
         updateOne: {
           filter: { draftId: row.draftId, pickNo: row.pickNo },
@@ -176,7 +201,7 @@ async function ingestCompletedDraftTrends({ leagueId, draftId, season, force = f
               ...row,
               playerName: player.name || null,
               position: player.position || null,
-              isRookie: !!player.isRookie,
+              isRookie,
             },
           },
           upsert: true,
