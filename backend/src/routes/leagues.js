@@ -17,10 +17,13 @@ const {
 const { ingestCompletedDraftTrends } = require('../services/draftTrendService');
 const { generateBuySellAlerts } = require('../services/alertService');
 const { calcPersonalRankScore } = require('../services/scoringEngine');
+const { ingestDevyDiscrepancyReport } = require('../services/learningEngine');
+const { inferMissReason, sendDiscrepancyEmail } = require('../services/discrepancyReportService');
 const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const DevyOwnershipSnapshot = require('../models/DevyOwnershipSnapshot');
+const DevyDiscrepancyReport = require('../models/DevyDiscrepancyReport');
 const { extractDevyCandidatesFromAlias } = require('../utils/devyNoteParser');
 const { normalizeComparableName, scoreComparableNameMatch } = require('../utils/devyNameMatcher');
 
@@ -1063,6 +1066,97 @@ router.post('/:leagueId/draft-feedback', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/leagues/:leagueId/devy-discrepancy
+// Lets users report "player already drafted" misses in devy availability.
+// Stores report reason in DB, emails maintainer, and feeds report into learning.
+router.post('/:leagueId/devy-discrepancy', requireAuth, async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const { sleeperId, username } = req.user;
+    const {
+      playerName,
+      playerSleeperId,
+      associatedPlayerId,
+      associatedPlayerName,
+      sourceTab,
+      note,
+      suspectedMissReason,
+    } = req.body || {};
+
+    if (!playerName || !String(playerName).trim()) {
+      return res.status(400).json({ error: 'playerName is required' });
+    }
+
+    const league = await League.findOne({ sleeperId: leagueId }).lean();
+    if (!league) return res.status(404).json({ error: 'League not found' });
+    const userIsInLeague = (league.rosters || []).some((roster) => roster.ownerId === sleeperId);
+    if (!userIsInLeague) return res.status(403).json({ error: 'You do not have access to this league' });
+
+    const normalizedReason = inferMissReason({
+      suspectedMissReason,
+      playerSleeperId,
+      associatedPlayerId,
+      playerName,
+    });
+
+    const report = await DevyDiscrepancyReport.create({
+      leagueId,
+      leagueName: league.name || null,
+      reporterSleeperId: sleeperId,
+      reporterUsername: username || sleeperId,
+      playerName: String(playerName).trim(),
+      playerSleeperId: playerSleeperId ? String(playerSleeperId).trim() : null,
+      associatedPlayerId: associatedPlayerId ? String(associatedPlayerId).trim() : null,
+      associatedPlayerName: associatedPlayerName ? String(associatedPlayerName).trim() : null,
+      sourceTab: ['available', 'rostered', 'graduated', 'unknown', 'compare', 'other'].includes(sourceTab)
+        ? sourceTab
+        : 'available',
+      note: note ? String(note).trim().slice(0, 800) : null,
+      suspectedMissReason: normalizedReason,
+    });
+
+    const learning = await ingestDevyDiscrepancyReport({
+      sleeperId,
+      username,
+      reportId: report._id,
+      leagueId,
+      playerName: report.playerName,
+      playerSleeperId: report.playerSleeperId,
+      sourceTab: report.sourceTab,
+      suspectedMissReason: report.suspectedMissReason,
+      note: report.note,
+    });
+
+    const emailResult = await sendDiscrepancyEmail({ report, leagueName: league.name });
+
+    await DevyDiscrepancyReport.updateOne(
+      { _id: report._id },
+      {
+        $set: {
+          learningApplied: !!learning?.learned,
+          learningNote: learning?.learned
+            ? `learning_reason=${learning.reason}; reason_count=${learning.count}`
+            : `learning_skipped=${learning?.reason || 'unknown'}`,
+          emailSent: !!emailResult?.sent,
+          emailError: emailResult?.sent ? null : (emailResult?.error || 'email_send_failed'),
+        },
+      }
+    );
+
+    res.json({
+      ok: true,
+      reportId: String(report._id),
+      suspectedMissReason: normalizedReason,
+      learningApplied: !!learning?.learned,
+      emailSent: !!emailResult?.sent,
+      emailStatus: emailResult?.sent ? 'sent' : (emailResult?.error || 'failed'),
+    });
+  } catch (err) {
+    console.error('[Devy Discrepancy]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/leagues/:leagueId/draft-grade
 // Returns completed-draft letter grades relative to league median (C = median).
 router.get('/:leagueId/draft-grade', requireAuth, async (req, res) => {
@@ -1153,7 +1247,10 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     // and rosters are now short-TTL cached in sleeperService to reduce load.
     let sleeperPlayerMap = {};
     let userMetaById = {};
+    let ownerUsernameById = {};
+    let ownerTeamNameById = {};
     let sleeperRosterMetaByOwnerId = {};
+    let liveRosters = [];
     const [playersRes, usersRes, rostersRes] = await Promise.allSettled([
       sleeperService.getAllPlayers('nfl'),
       sleeperService.getLeagueUsers(leagueId),
@@ -1169,12 +1266,18 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     if (usersRes.status === 'fulfilled') {
       const users = usersRes.value || [];
       userMetaById = Object.fromEntries(users.map(u => [u.user_id, u.metadata || {}]));
+      ownerUsernameById = Object.fromEntries(
+        users.map((u) => [u.user_id, u.display_name || u.username || u.user_id])
+      );
+      ownerTeamNameById = Object.fromEntries(
+        users.map((u) => [u.user_id, u.metadata?.team_name || null])
+      );
     } else {
       console.warn('[DevyPool] League user metadata unavailable:', usersRes.reason?.message || usersRes.reason);
     }
 
     if (rostersRes.status === 'fulfilled') {
-      const liveRosters = rostersRes.value || [];
+      liveRosters = rostersRes.value || [];
       for (const r of liveRosters) {
         if (r.owner_id && r.metadata) {
           sleeperRosterMetaByOwnerId[r.owner_id] = r.metadata;
@@ -1217,6 +1320,44 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     for (const metadata of Object.values(userMetaById)) pushAliasesFromMeta(metadata);
     for (const metadata of Object.values(sleeperRosterMetaByOwnerId)) pushAliasesFromMeta(metadata);
 
+    const dbRosterByOwner = new Map();
+    for (const roster of (league.rosters || [])) {
+      if (!roster?.ownerId) continue;
+      dbRosterByOwner.set(roster.ownerId, {
+        ownerId: roster.ownerId,
+        ownerUsername: roster.ownerUsername || ownerUsernameById[roster.ownerId] || roster.ownerId,
+        ownerTeamName: roster.ownerTeamName || ownerTeamNameById[roster.ownerId] || null,
+        playerIds: roster.playerIds || [],
+        taxiPlayerIds: roster.taxiPlayerIds || [],
+      });
+    }
+
+    // Overlay DB rosters with live Sleeper roster player/taxi lists so the devy
+    // pool reflects in-progress draft picks immediately.
+    if (liveRosters.length > 0) {
+      for (const r of liveRosters) {
+        const ownerId = r?.owner_id ? String(r.owner_id) : null;
+        if (!ownerId) continue;
+        const existing = dbRosterByOwner.get(ownerId) || {
+          ownerId,
+          ownerUsername: ownerUsernameById[ownerId] || ownerId,
+          ownerTeamName: ownerTeamNameById[ownerId] || null,
+          playerIds: [],
+          taxiPlayerIds: [],
+        };
+        dbRosterByOwner.set(ownerId, {
+          ...existing,
+          ownerId,
+          ownerUsername: existing.ownerUsername || ownerUsernameById[ownerId] || ownerId,
+          ownerTeamName: existing.ownerTeamName || ownerTeamNameById[ownerId] || null,
+          playerIds: Array.isArray(r.players) ? r.players : existing.playerIds,
+          taxiPlayerIds: Array.isArray(r.taxi) ? r.taxi : existing.taxiPlayerIds,
+        });
+      }
+    }
+
+    const effectiveRosters = [...dbRosterByOwner.values()];
+
     // Collect every player ID across all rosters (active + taxi).
     // Also parse commissioner-managed player notes to discover attached devy prospects
     // stored as aliases (often inside parentheses).
@@ -1224,7 +1365,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const idToRoster = {};  // sleeperId -> { ownerId, username, onTaxi }
     const noteDerivedDevyEntries = [];
     const seenNoteDerived = new Set();
-    for (const roster of league.rosters || []) {
+    for (const roster of effectiveRosters) {
       const active = roster.playerIds || [];
       const taxi = roster.taxiPlayerIds || [];
       // Merge user metadata with live roster metadata for this owner

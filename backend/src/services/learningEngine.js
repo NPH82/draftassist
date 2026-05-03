@@ -444,5 +444,69 @@ async function learnFromUserLeagues(userId, leagueIds) {
   };
 }
 
-module.exports = { ingestDraft, learnFromUserLeagues, generateScoutingNotes, enrichProfilesWithDraftClass };
+async function ingestDevyDiscrepancyReport({
+  sleeperId,
+  username,
+  reportId,
+  leagueId,
+  playerName,
+  playerSleeperId,
+  sourceTab,
+  suspectedMissReason,
+  note,
+}) {
+  if (!sleeperId) return { learned: false, reason: 'missing_sleeper_id' };
+
+  const profile = await ManagerProfile.findOneAndUpdate(
+    { sleeperId },
+    { $setOnInsert: { sleeperId } },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  const reason = String(suspectedMissReason || 'other');
+  const reasonCounts = profile.devyMissReasonCounts instanceof Map
+    ? Object.fromEntries(profile.devyMissReasonCounts)
+    : (profile.devyMissReasonCounts || {});
+  reasonCounts[reason] = Number(reasonCounts[reason] || 0) + 1;
+
+  const history = Array.isArray(profile.devyDiscrepancyReports) ? profile.devyDiscrepancyReports : [];
+  history.unshift({
+    reportId: String(reportId || ''),
+    leagueId: leagueId || null,
+    playerName: playerName || null,
+    playerSleeperId: playerSleeperId || null,
+    sourceTab: sourceTab || 'available',
+    suspectedMissReason: reason,
+    note: note || null,
+    createdAt: new Date(),
+  });
+
+  const cappedHistory = history.slice(0, 120);
+  const scoutingNotes = Array.isArray(profile.scoutingNotes) ? [...profile.scoutingNotes] : [];
+  const learningNote = `Devy discrepancy reports: ${reason} (${reasonCounts[reason]})`;
+  const cleanedNotes = scoutingNotes.filter((n) => !/^Devy discrepancy reports:/.test(n));
+  cleanedNotes.unshift(learningNote);
+
+  const update = {
+    username: username || profile.username || null,
+    devyMissReasonCounts: reasonCounts,
+    devyDiscrepancyReports: cappedHistory,
+    scoutingNotes: cleanedNotes.slice(0, 25),
+    $inc: { devyDiscrepancyReportCount: 1 },
+    lastUpdated: new Date(),
+  };
+  if (leagueId) update.$addToSet = { leaguesObserved: leagueId };
+
+  await ManagerProfile.findOneAndUpdate({ sleeperId }, update);
+
+  return { learned: true, reason, count: reasonCounts[reason] };
+}
+
+module.exports = {
+  ingestDraft,
+  learnFromUserLeagues,
+  generateScoutingNotes,
+  enrichProfilesWithDraftClass,
+  ingestDevyDiscrepancyReport,
+};
 

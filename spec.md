@@ -8,7 +8,7 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 
 ## Implementation Status
 
-**Fully implemented and deployed as of April 26, 2026.**
+**Fully implemented and deployed as of May 3, 2026.**
 
 | Layer | Status | URL |
 |---|---|---|
@@ -60,6 +60,11 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **`HintTradeCard` in `DraftMode.jsx`**: strategy hint banner now renders expandable trade cards with pick value bars and package options instead of plain text reason strings
 - **BPA stale closure fix in `DraftContext.jsx`**: `fetchState` callback no longer depends on `queue` (removed from `useCallback` deps). Queue updates use functional `setQueue(q => ...)`. `useEffect` deps changed to `[fetchState]` so mode changes trigger an immediate re-fetch and interval restart
 - **Trade direction gate removed**: `/api/draft/:id/trades` route previously only called `suggestTradeUp` when `marketRank < myNextPickNumber`. Gate removed — trade-up always runs; `suggestTradeUp()` itself correctly filters to managers picking before the user
+- **Completed draft grading model changed (league grade endpoint)**: draft grades now use direct ADP deviation (avg picks vs ADP) with explicit `A/B/C/D/F` thresholds. Sorting and rank assignment are now displayed in descending grade order (`A -> F`) with in-grade tie-breakers by ADP deviation score
+- **Completed-draft ADP ingest updated for rookie context**: rookie observations are now correctly identified from rookie/devy draft shape and draft season, persisted into `sleeperRookieObservedAdp`, and blended into `expectedAdp` as the preferred signal when available
+- **Devy pool hardening for drafted/duplicate misses**: pool build now overlays DB rosters with live Sleeper rosters, excludes picked players regardless of draft status (in-progress or complete), excludes full roster membership (`allRosterIds`), and dedupes rostered/available rows by canonical identity (owner + devy identity for rostered, sleeperId/name+position for available)
+- **Alias mismatch fallback exclusion added**: reverse fuzzy matching now excludes available DB records when note-candidate names map back to the same player despite name variations/typos (e.g., `Nate/Nathan`, `Frazier/Fraizer`, truncated school suffixes)
+- **User-reported devy discrepancy workflow added**: available devy rows now expose a `Report drafted` action that submits a discrepancy report; backend persists report reason/details in `DevyDiscrepancyReport`, applies learning updates to `ManagerProfile`, and sends a maintainer email via SMTP when configured
 
 ---
 
@@ -106,7 +111,7 @@ app.js              Express app: middleware, route mounting, CORS
 config/db.js        Mongoose connection
 jobs/scheduler.js   node-cron registered jobs (daily rankings, weekly depth charts, weekly Sleeper sync)
 middleware/auth.js  requireAuth middleware (Bearer token → req.user)
-models/             Mongoose schemas (Player, League, ManagerProfile, RankingSnapshot, DraftSession, User)
+models/             Mongoose schemas (Player, League, ManagerProfile, RankingSnapshot, DevyOwnershipSnapshot, DevyDiscrepancyReport, User)
 routes/             Express routers (one file per domain)
   admin.js          Protected management endpoints
   auth.js           Login / logout / session check
@@ -129,7 +134,8 @@ services/
   scoringEngine.js    calculateDAS() — Draft Assistant Score
   winWindowService.js computeRosterMaturity() + computeLeagueOutlooks() + analyzePositionalNeeds()
   alertService.js     generateBuySellAlerts()
-  learningEngine.js   ingestDraft() + learnFromUserLeagues() + generateScoutingNotes()
+  learningEngine.js   ingestDraft() + learnFromUserLeagues() + generateScoutingNotes() + ingestDevyDiscrepancyReport()
+  discrepancyReportService.js  Devy discrepancy reason inference + SMTP email dispatch
   tradeEngine.js      Trade suggestion logic
   availabilityPredictor.js  Pick-by-pick availability probability
 ```
@@ -397,6 +403,14 @@ The starting dynasty board is seeded from a Claude-generated Top 48 dynasty rook
   - **Manager tendency profiles** -- consistent positional, college, and NFL team preferences
   - **Availability predictions** -- probability a player is still on the board at a given pick
   - **Roster construction patterns** -- which player types a manager targets based on their current roster state
+  - **Devy discrepancy feedback loop** -- user-submitted "already drafted" misses are persisted with reason codes, counted in manager learning history, and surfaced in scouting notes for iterative rules tuning
+
+### Devy Discrepancy Reporting
+- Endpoint: `POST /api/leagues/:leagueId/devy-discrepancy`
+- Captures: player identity, league context, source tab, user note, and inferred/specified miss reason
+- Persistence: stored in `DevyDiscrepancyReport` with `learningApplied` + `emailSent` status fields
+- Notification: sends maintainer email when SMTP env vars are configured (`DISCREPANCY_REPORT_TO_EMAIL`, `SMTP_*`)
+- Learning integration: report ingestion updates `ManagerProfile.devyMissReasonCounts`, increments discrepancy totals, and appends a learning/scouting note
 
 ---
 
@@ -406,4 +420,4 @@ The starting dynasty board is seeded from a Claude-generated Top 48 dynasty rook
 - **Installable** to phone home screen via PWA manifest and service worker
 - **Offline resilience** -- caches last known board state; displays "offline -- using cached data" warning if connectivity is lost mid-draft
 - **Stale data indicator** -- all data panels show "last updated: X time ago"; prominently displayed during live drafts
-- **In-app alerts** -- toast/banner notifications for faller alerts and buy/sell signals (no push notifications, no email)
+- **In-app alerts** -- toast/banner notifications for faller alerts and buy/sell signals (no push notifications). Devy discrepancy reports are a separate explicit user action and may trigger maintainer email when configured

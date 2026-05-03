@@ -64,6 +64,20 @@ const managerProfileSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now },
   }],
 
+  // User-reported devy pool misses to improve future filtering heuristics.
+  devyDiscrepancyReportCount: { type: Number, default: 0 },
+  devyMissReasonCounts: { type: Map, of: Number, default: {} },
+  devyDiscrepancyReports: [{
+    reportId: String,
+    leagueId: String,
+    playerName: String,
+    playerSleeperId: String,
+    sourceTab: String,
+    suspectedMissReason: String,
+    note: String,
+    createdAt: { type: Date, default: Date.now },
+  }],
+
   lastUpdated: { type: Date, default: Date.now },
 }, { timestamps: true });
 

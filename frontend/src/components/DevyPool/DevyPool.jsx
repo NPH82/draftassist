@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getDevyPool } from '../../services/api';
+import { getDevyPool, reportDevyDiscrepancy } from '../../services/api';
 
 const SKILL_POSITIONS = ['QB', 'RB', 'WR', 'TE'];
 
@@ -22,7 +22,7 @@ function sheetVsKtcLabel(player) {
   return labels.join(' · ');
 }
 
-function DevyPlayerRow({ player, showOwner }) {
+function DevyPlayerRow({ player, showOwner, onReportDrafted, reporting }) {
   const val = devyValue(player);
   const posClass = `pos-${player.position}`;
   return (
@@ -101,6 +101,29 @@ function DevyPlayerRow({ player, showOwner }) {
           <div style={{ color: 'var(--text-muted)', fontSize: '0.62rem' }}>DAS</div>
         </div>
       )}
+
+      {!showOwner && onReportDrafted && (
+        <div style={{ textAlign: 'right', marginLeft: '0.4rem' }}>
+          <button
+            type="button"
+            onClick={() => onReportDrafted(player)}
+            disabled={!!reporting}
+            style={{
+              fontSize: '0.62rem',
+              border: 'none',
+              borderRadius: 4,
+              padding: '0.18rem 0.38rem',
+              cursor: reporting ? 'default' : 'pointer',
+              background: reporting ? 'var(--bg-primary)' : 'rgba(239,68,68,0.12)',
+              color: reporting ? 'var(--text-muted)' : '#f87171',
+              fontWeight: 600,
+            }}
+            title="Report this player as already drafted"
+          >
+            {reporting ? 'Sending...' : 'Report drafted'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -164,6 +187,8 @@ export default function DevyPool({ leagueId }) {
   const [tab, setTab] = useState('available'); // 'available' | 'rostered' | 'graduated' | 'compare'
   const [compareMode, setCompareMode] = useState('overall'); // 'overall' | 'position'
   const [showUnknown, setShowUnknown] = useState(false);
+  const [reportingKey, setReportingKey] = useState(null);
+  const [reportStatus, setReportStatus] = useState(null);
 
   useEffect(() => {
     if (!leagueId) return;
@@ -236,6 +261,47 @@ export default function DevyPool({ leagueId }) {
       || `${player.ownerId || 'na'}-${player.associatedPlayerName || player.name}-${idx}`
   );
 
+  const reportKeyForPlayer = (player) => (
+    player.sleeperId || `${player.name}-${player.position || '?'}-${player.college || 'na'}`
+  );
+
+  async function handleReportDrafted(player) {
+    const reason = window.prompt(
+      `Add a quick note for why ${player.name} should be excluded (optional):`,
+      ''
+    );
+    const key = reportKeyForPlayer(player);
+    setReportingKey(key);
+    setReportStatus(null);
+    try {
+      const res = await reportDevyDiscrepancy(leagueId, {
+        playerName: player.name,
+        playerSleeperId: player.sleeperId || null,
+        associatedPlayerId: player.associatedPlayerId || null,
+        associatedPlayerName: player.associatedPlayerName || null,
+        sourceTab: 'available',
+        note: reason ? String(reason).trim() : null,
+      });
+      setReportStatus({
+        type: 'ok',
+        message: res?.emailSent
+          ? `${player.name} reported. Email sent and learning updated.`
+          : `${player.name} reported. Saved and learning updated (email: ${res?.emailStatus || 'not sent'}).`,
+      });
+
+      // Refresh pool after report so any newly-caught matches disappear immediately.
+      const refreshed = await getDevyPool(leagueId);
+      setData(refreshed);
+    } catch (err) {
+      setReportStatus({
+        type: 'err',
+        message: err?.response?.data?.error || `Failed to report ${player.name}`,
+      });
+    } finally {
+      setReportingKey(null);
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
@@ -286,13 +352,32 @@ export default function DevyPool({ leagueId }) {
       {/* Available pool */}
       {tab === 'available' && (
         <div>
+          {reportStatus && (
+            <div
+              className="text-xs"
+              style={{
+                marginBottom: '0.4rem',
+                color: reportStatus.type === 'ok' ? 'var(--green)' : 'var(--red, #ef4444)',
+              }}
+            >
+              {reportStatus.message}
+            </div>
+          )}
           {available.length === 0 ? (
             <div className="text-xs text-muted" style={{ padding: '0.5rem 0' }}>
               No available prospects found.{' '}
               {data.counts.available === 0 && 'Run the devy rankings sync to seed the pool from the spreadsheet and KTC.'}
             </div>
           ) : (
-            available.map(p => <DevyPlayerRow key={p.sleeperId} player={p} showOwner={false} />)
+            available.map((p, idx) => (
+              <DevyPlayerRow
+                key={devyRowKey(p, idx)}
+                player={p}
+                showOwner={false}
+                onReportDrafted={handleReportDrafted}
+                reporting={reportingKey === reportKeyForPlayer(p)}
+              />
+            ))
           )}
         </div>
       )}
