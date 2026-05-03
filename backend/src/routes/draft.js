@@ -121,53 +121,24 @@ function round2(value) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
 
-function median(values = []) {
-  if (!values.length) return 0;
-  const sorted = values.slice().sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) return (sorted[mid - 1] + sorted[mid]) / 2;
-  return sorted[mid];
-}
-
-function stdDev(values = []) {
-  if (!values.length) return 0;
-  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
-  const variance = values.reduce((sum, v) => sum + ((v - mean) ** 2), 0) / values.length;
-  return Math.sqrt(Math.max(variance, 0));
-}
-
-function gradeFromZScore(z) {
-  if (z >= 1.8) return 'A+';
-  if (z >= 1.4) return 'A';
-  if (z >= 1.1) return 'A-';
-  if (z >= 0.8) return 'B+';
-  if (z >= 0.5) return 'B';
-  if (z >= 0.25) return 'B-';
-  if (z >= 0.1) return 'C+';
-  if (z > -0.1) return 'C';
-  if (z >= -0.35) return 'C-';
-  if (z >= -0.65) return 'D+';
-  if (z >= -0.95) return 'D';
-  if (z >= -1.25) return 'D-';
+function gradeFromAdpDeviation(avgPickDelta) {
+  // Positive avgPickDelta means the manager drafted players later than ADP
+  // (better value). Negative means reaching earlier than ADP.
+  if (!Number.isFinite(avgPickDelta)) return 'C';
+  if (avgPickDelta >= 8) return 'A';
+  if (avgPickDelta >= 2) return 'B';
+  if (avgPickDelta > -2) return 'C';
+  if (avgPickDelta > -8) return 'D';
   return 'F';
 }
 
-// Assign grade based on rank percentile so the letter grade always reflects
-// position in the standings (A at the top, F at the bottom).
-function gradeFromRank(rank, total) {
-  const pct = rank / Math.max(1, total);
-  if (pct <= 1 / 12) return 'A+';
-  if (pct <= 2 / 12) return 'A';
-  if (pct <= 3 / 12) return 'A-';
-  if (pct <= 4 / 12) return 'B+';
-  if (pct <= 5 / 12) return 'B';
-  if (pct <= 6 / 12) return 'B-';
-  if (pct <= 7 / 12) return 'C+';
-  if (pct <= 8 / 12) return 'C';
-  if (pct <= 9 / 12) return 'C-';
-  if (pct <= 10 / 12) return 'D+';
-  if (pct <= 11 / 12) return 'D';
-  return 'F';
+function gradeSortValue(grade) {
+  if (grade === 'A') return 5;
+  if (grade === 'B') return 4;
+  if (grade === 'C') return 3;
+  if (grade === 'D') return 2;
+  if (grade === 'F') return 1;
+  return 0;
 }
 
 function consensusAdpSignalForGrading(player = {}, { rookieDraft = false } = {}) {
@@ -273,45 +244,29 @@ function computeCompletedDraftGrades({
     };
   });
 
-  const validRaw = baseRows.map((r) => r.rawScore).filter((v) => Number.isFinite(v));
-  const med = median(validRaw);
-  const spread = Math.max(0.12, stdDev(validRaw));
-
   const graded = baseRows.map((row) => {
-    if (!Number.isFinite(row.rawScore)) {
-      return {
-        ...row,
-        rawScore: null,
-        zScore: null,
-        grade: 'C',
-      };
-    }
-    const z = (row.rawScore - med) / spread;
+    const adpDeviationScore = Number.isFinite(row.avgPickDelta) ? row.avgPickDelta : null;
     return {
       ...row,
-      rawScore: round2(row.rawScore),
-      zScore: round2(z),
-      grade: gradeFromZScore(z),
+      rawScore: Number.isFinite(row.rawScore) ? round2(row.rawScore) : null,
+      adpDeviationScore,
+      grade: gradeFromAdpDeviation(adpDeviationScore),
     };
   });
 
-  // Scale z-scores so the largest absolute deviation maps to ±1.8, ensuring
-  // the full A+ → F spectrum is always used while still reflecting actual
-  // variance (two managers with similar raw scores will still get the same grade).
-  const maxAbsZ = graded.reduce((max, r) =>
-    Number.isFinite(r.zScore) ? Math.max(max, Math.abs(r.zScore)) : max, 0);
-  const zScale = maxAbsZ > 0.01 ? 1.8 / maxAbsZ : 1;
-
-  for (const row of graded) {
-    if (Number.isFinite(row.zScore)) {
-      row.grade = gradeFromZScore(row.zScore * zScale);
-    }
-  }
-
   graded.sort((a, b) => {
-    const az = Number.isFinite(a.zScore) ? a.zScore : -999;
-    const bz = Number.isFinite(b.zScore) ? b.zScore : -999;
-    if (bz !== az) return bz - az;
+    const ag = gradeSortValue(a.grade);
+    const bg = gradeSortValue(b.grade);
+    if (bg !== ag) return bg - ag;
+
+    const ad = Number.isFinite(a.adpDeviationScore) ? a.adpDeviationScore : -999;
+    const bd = Number.isFinite(b.adpDeviationScore) ? b.adpDeviationScore : -999;
+    if (bd !== ad) return bd - ad;
+
+    const ar = Number.isFinite(a.rawScore) ? a.rawScore : -999;
+    const br = Number.isFinite(b.rawScore) ? b.rawScore : -999;
+    if (br !== ar) return br - ar;
+
     return (a.ownerUsername || '').localeCompare(b.ownerUsername || '');
   });
 
@@ -322,10 +277,9 @@ function computeCompletedDraftGrades({
   return {
     managers: graded,
     baseline: {
-      medianRawScore: round2(med),
-      spread: round2(spread),
-      medianGrade: 'C',
-      note: 'Positive avgPickDelta means manager drafted players later than consensus ADP (better value).',
+      neutralAvgPickDelta: 0,
+      neutralGrade: 'C',
+      note: 'Grades are based on avg pick deviation from ADP: later than ADP is better; earlier than ADP is worse.',
     },
   };
 }
