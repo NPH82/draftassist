@@ -1329,7 +1329,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     }
     // Load devy players from our DB
     const devyDbPlayers = await Player.find({ isDevy: true })
-      .select('sleeperId name position college devyClass devyKtcValue devyKtcRank ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age sheetRank sheetRating sheetAvgOvrRank')
+      .select('sleeperId name position college devyClass devyKtcValue devyKtcRank ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age nflDraftYear sheetRank sheetRating sheetAvgOvrRank')
       .lean();
 
     const devyBySleeperID = Object.fromEntries(devyDbPlayers.map(p => [p.sleeperId, p]));
@@ -1568,6 +1568,28 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       });
     }
 
+    const rosterBestByKey = new Map();
+    const rosterPriority = (row) => {
+      let score = 0;
+      if (row.inOurDb) score += 8;
+      if (row.devyPlayerId) score += 5;
+      if (row.sleeperId) score += 3;
+      if (!row.fromPlayerNote) score += 2;
+      if (Number.isFinite(row.devyKtcRank)) score += 1;
+      return score;
+    };
+
+    for (const row of rosterList) {
+      const canonicalId = row.devyPlayerId || row.sleeperId || normalizeName(row.name || '');
+      const dedupeKey = `${row.ownerId || 'na'}:${canonicalId || row.associatedPlayerId || 'unknown'}`;
+      const existing = rosterBestByKey.get(dedupeKey);
+      if (!existing || rosterPriority(row) > rosterPriority(existing)) {
+        rosterBestByKey.set(dedupeKey, row);
+      }
+    }
+
+    const dedupedRosterList = [...rosterBestByKey.values()];
+
     // Build graduated list — devy players who are now on NFL rosters
     const graduatedList = [];
     for (const id of graduatedIds) {
@@ -1588,14 +1610,21 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     }
 
     // Build available pool: all devy players in our DB NOT on any roster in this league
-    const availablePool = devyDbPlayers
+    const currentYear = new Date().getFullYear();
+    const availableCandidates = devyDbPlayers
       .filter(p => {
         // Exclude players already picked in the current live draft.
         if (p.sleeperId && draftedPlayerIds.has(p.sleeperId)) return false;
+        // Exclude any player already rostered/taxi in this league.
+        if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
         // Exclude players currently rostered in this league (by sleeperId or name)
         if (p.sleeperId && devyRosteredIds.has(p.sleeperId)) return false;
         if (rosteredNames.has(normalizeName(p.name))) return false;
         if (rosteredDevyNames.has(normalizeName(p.name))) return false;
+
+        // If the player already has an NFL draft year at or before current year,
+        // they have graduated from devy availability.
+        if (Number.isFinite(Number(p.nflDraftYear)) && Number(p.nflDraftYear) <= currentYear) return false;
         return true;
       })
       .map(p => {
@@ -1631,6 +1660,26 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         };
       })
       .filter(Boolean)
+      ;
+
+    const availableBestByKey = new Map();
+    const availablePriority = (row) => {
+      const sheetBonus = Number.isFinite(row.sheetRank) ? Math.max(0, 5000 - row.sheetRank) : 0;
+      const ktcBonus = Number.isFinite(row.devyKtcRank) ? Math.max(0, 3000 - row.devyKtcRank) : 0;
+      const valueBonus = Number(row.devyKtcValue || row.ktcValue || 0) / 10;
+      return sheetBonus + ktcBonus + valueBonus;
+    };
+
+    for (const row of availableCandidates) {
+      const canonicalName = normalizeComparableName(row.name || '');
+      const dedupeKey = row.sleeperId || `${canonicalName}|${row.position || '?'}`;
+      const existing = availableBestByKey.get(dedupeKey);
+      if (!existing || availablePriority(row) > availablePriority(existing)) {
+        availableBestByKey.set(dedupeKey, row);
+      }
+    }
+
+    const availablePool = [...availableBestByKey.values()]
       .sort((a, b) => {
         const aSheet = Number.isFinite(a.sheetRank) ? a.sheetRank : null;
         const bSheet = Number.isFinite(b.sheetRank) ? b.sheetRank : null;
@@ -1650,7 +1699,6 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       });
 
     // Build current rookie availability pool in this league (non-devy rookies not rostered).
-    const currentYear = new Date().getFullYear();
     const rookieDbPlayers = await Player.find({
       isDevy: { $ne: true },
       $or: [
@@ -1740,7 +1788,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
     // Persist observed devy ownership rows to a cross-league cache so future
     // note lookups can resolve faster and with better attribution.
-    const snapshotRows = [...rosterList, ...unknownPlayers];
+    const snapshotRows = [...dedupedRosterList, ...unknownPlayers];
     const snapshotOps = [];
     const now = new Date();
     for (const row of snapshotRows) {
@@ -1801,14 +1849,14 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       isDevyLeague: devyEnabled,
       isIdpLeague: idpEnabled,
       positionFilters,
-      rostered: rosterList,
+      rostered: dedupedRosterList,
       unknown: unknownPlayers,   // devy players Sleeper knows about but we haven't imported yet
       graduated: graduatedList,  // recently NFL-drafted — were in devy pool
       available: availablePool,
       availableRookies,
       comparisonRows,
       counts: {
-        rostered: rosterList.length,
+        rostered: dedupedRosterList.length,
         unknown: unknownPlayers.length,
         graduated: graduatedList.length,
         available: availablePool.length,
