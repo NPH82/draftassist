@@ -152,6 +152,24 @@ function gradeFromZScore(z) {
   return 'F';
 }
 
+// Assign grade based on rank percentile so the letter grade always reflects
+// position in the standings (A at the top, F at the bottom).
+function gradeFromRank(rank, total) {
+  const pct = rank / Math.max(1, total);
+  if (pct <= 1 / 12) return 'A+';
+  if (pct <= 2 / 12) return 'A';
+  if (pct <= 3 / 12) return 'A-';
+  if (pct <= 4 / 12) return 'B+';
+  if (pct <= 5 / 12) return 'B';
+  if (pct <= 6 / 12) return 'B-';
+  if (pct <= 7 / 12) return 'C+';
+  if (pct <= 8 / 12) return 'C';
+  if (pct <= 9 / 12) return 'C-';
+  if (pct <= 10 / 12) return 'D+';
+  if (pct <= 11 / 12) return 'D';
+  return 'F';
+}
+
 function consensusAdpSignalForGrading(player = {}, { rookieDraft = false } = {}) {
   const rookieObserved = Number(player.sleeperRookieObservedAdp || 0);
   const observed = Number(player.sleeperObservedAdp || 0);
@@ -276,6 +294,19 @@ function computeCompletedDraftGrades({
       grade: gradeFromZScore(z),
     };
   });
+
+  // Scale z-scores so the largest absolute deviation maps to ±1.8, ensuring
+  // the full A+ → F spectrum is always used while still reflecting actual
+  // variance (two managers with similar raw scores will still get the same grade).
+  const maxAbsZ = graded.reduce((max, r) =>
+    Number.isFinite(r.zScore) ? Math.max(max, Math.abs(r.zScore)) : max, 0);
+  const zScale = maxAbsZ > 0.01 ? 1.8 / maxAbsZ : 1;
+
+  for (const row of graded) {
+    if (Number.isFinite(row.zScore)) {
+      row.grade = gradeFromZScore(row.zScore * zScale);
+    }
+  }
 
   graded.sort((a, b) => {
     const az = Number.isFinite(a.zScore) ? a.zScore : -999;
