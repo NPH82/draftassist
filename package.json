@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "hooks:install": "git config core.hooksPath .githooks",
+    "security:audit": "npm audit --audit-level=high --prefix backend && npm audit --audit-level=high --prefix frontend"
+  },
   "dependencies": {
     "axios": "^1.15.2",
     "cheerio": "^1.2.0",

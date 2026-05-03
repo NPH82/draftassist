@@ -45,6 +45,43 @@ Frontend: http://localhost:5173
 Backend API: http://localhost:4000  
 Health check: http://localhost:4000/health
 
+### 4. Local security gate (required)
+To block pushes that contain high-severity vulnerabilities, install the repo-tracked pre-push hook once per clone:
+
+```bash
+cd ..
+npm run hooks:install
+```
+
+What this does:
+- Configures Git hooks path to `.githooks`
+- Runs `npm audit --audit-level=high` in both `backend/` and `frontend/` before every push
+- Blocks the push if either audit fails
+
+Policy note:
+- Local hooks can technically be skipped with Git's `--no-verify` flag. Do not use it.
+- Non-bypass enforcement is handled by required GitHub checks (next section).
+
+You can also run the same check manually anytime:
+
+```bash
+npm run security:audit
+```
+
+### 5. GitHub non-bypass security rule (required)
+Configure branch protection (or a ruleset) on `main` so merges are blocked unless security checks pass.
+
+Required settings:
+- Require a pull request before merging
+- Require status checks to pass before merging
+- Required checks:
+   - `Backend -- Audit & Lint`
+   - `Frontend -- Audit, Build & PWA check`
+- Restrict who can push directly to `main`
+- Do not allow bypass for administrators (if your org/repo settings support this toggle)
+
+This makes vulnerability checks non-optional even if someone tries to skip local hooks.
+
 ---
 
 ## Database Seed
