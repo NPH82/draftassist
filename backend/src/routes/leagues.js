@@ -1184,24 +1184,18 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       console.warn('[DevyPool] Live roster metadata unavailable:', rostersRes.reason?.message || rostersRes.reason);
     }
 
-    // During a live draft, exclude already picked players from compare pools.
+    // Exclude players picked in the league draft — covers both in-progress and recently
+    // completed drafts (Sleeper roster sync lags behind pick data after completion).
     const draftedPlayerIds = new Set();
-    const isLiveDraftStatus = (status) => {
-      const s = String(status || '').toLowerCase();
-      return s === 'drafting' || s === 'paused';
-    };
     if (league.draftId) {
       try {
-        const draftData = await sleeperService.getDraft(league.draftId);
-        if (isLiveDraftStatus(draftData?.status)) {
-          const draftPicks = await sleeperService.getDraftPicks(league.draftId);
-          for (const pick of (draftPicks || [])) {
-            const playerId = String(pick?.player_id || '').trim();
-            if (playerId) draftedPlayerIds.add(playerId);
-          }
+        const draftPicks = await sleeperService.getDraftPicks(league.draftId);
+        for (const pick of (draftPicks || [])) {
+          const playerId = String(pick?.player_id || '').trim();
+          if (playerId) draftedPlayerIds.add(playerId);
         }
       } catch (e) {
-        console.warn('[DevyPool] Live draft picks unavailable:', e.message);
+        console.warn('[DevyPool] Draft picks unavailable:', e.message);
       }
     }
 
@@ -1515,6 +1509,18 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const rosteredDevyNames = new Set(
       rosterList.map((row) => normalizeName(row.name)).filter(Boolean)
     );
+    // Track resolved DB identities so available pool can exclude by ID even when
+    // the candidate name and DB name differ (e.g. "Nathan Fraizer" vs "Nate Frazier").
+    const rosteredDevyDbIds = new Set(
+      rosterList.map((row) => row.devyPlayerId ? String(row.devyPlayerId) : null).filter(Boolean)
+    );
+    const rosteredDevySleeperIds = new Set(
+      rosterList.map((row) => row.sleeperId || null).filter(Boolean)
+    );
+    // Also track raw note candidate names for a second-pass fuzzy check.
+    const rosteredCandidateNames = new Set(
+      rosterList.map((row) => normalizeName(row.name)).filter(Boolean)
+    );
 
     for (const noteEntry of noteDerivedDevyEntries) {
       const matchedDb = resolveDevyByName(noteEntry.candidateName);
@@ -1538,6 +1544,14 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       if (existingRosteredKeys.has(dedupeKey)) continue;
       existingRosteredKeys.add(dedupeKey);
       rosteredDevyNames.add(normalizeName(resolvedName));
+      // Always add the candidate name too — so if resolvedName differs from the DB
+      // record name (e.g. alias "Nathan Fraizer" vs DB "Nate Frazier") the candidate
+      // itself is also in the exclusion set for the available pool reverse-fuzzy check.
+      rosteredCandidateNames.add(normalizeName(noteEntry.candidateName));
+      if (matchedDb) {
+        if (matchedDb._id) rosteredDevyDbIds.add(String(matchedDb._id));
+        if (matchedDb.sleeperId) rosteredDevySleeperIds.add(matchedDb.sleeperId);
+      }
 
       rosterList.push({
         sleeperId: matchedDb?.sleeperId || cached?.devySleeperId || null,
@@ -1613,14 +1627,25 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const currentYear = new Date().getFullYear();
     const availableCandidates = devyDbPlayers
       .filter(p => {
-        // Exclude players already picked in the current live draft.
+        // Exclude players already picked in the current draft (live or complete).
         if (p.sleeperId && draftedPlayerIds.has(p.sleeperId)) return false;
         // Exclude any player already rostered/taxi in this league.
         if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
-        // Exclude players currently rostered in this league (by sleeperId or name)
+        // Exclude players currently rostered in this league (by sleeperId or name).
         if (p.sleeperId && devyRosteredIds.has(p.sleeperId)) return false;
-        if (rosteredNames.has(normalizeName(p.name))) return false;
-        if (rosteredDevyNames.has(normalizeName(p.name))) return false;
+        // Exclude by resolved DB identity (covers note-alias mismatches like "Nathan Fraizer" -> "Nate Frazier").
+        if (p._id && rosteredDevyDbIds.has(String(p._id))) return false;
+        if (p.sleeperId && rosteredDevySleeperIds.has(p.sleeperId)) return false;
+        // Name-based exclusions.
+        const pNorm = normalizeName(p.name);
+        if (rosteredNames.has(pNorm)) return false;
+        if (rosteredDevyNames.has(pNorm)) return false;
+        // Reverse fuzzy: if any rostered candidate name resolves back to this player, exclude.
+        for (const candidateNorm of rosteredCandidateNames) {
+          if (candidateNorm === pNorm) continue; // already caught above
+          const score = scoreComparableNameMatch(candidateNorm, p.name);
+          if (score >= 70) return false;
+        }
 
         // If the player already has an NFL draft year at or before current year,
         // they have graduated from devy availability.
