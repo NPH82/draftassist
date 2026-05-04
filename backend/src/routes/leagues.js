@@ -1141,6 +1141,23 @@ router.post('/:leagueId/devy-discrepancy', requireAuth, async (req, res) => {
       console.warn('[Devy Discrepancy] Email send failed:', emailErr.message);
     }
 
+    if (emailResult?.sent) {
+      console.info('[Devy Discrepancy] Email notification sent', {
+        reportId: String(report._id),
+        leagueId,
+        playerName: report.playerName,
+        durationMs: emailResult?.durationMs || null,
+      });
+    } else {
+      console.warn('[Devy Discrepancy] Email notification not sent', {
+        reportId: String(report._id),
+        leagueId,
+        playerName: report.playerName,
+        reason: emailResult?.error || 'email_send_failed',
+        durationMs: emailResult?.durationMs || null,
+      });
+    }
+
     await DevyDiscrepancyReport.updateOne(
       { _id: report._id },
       {
