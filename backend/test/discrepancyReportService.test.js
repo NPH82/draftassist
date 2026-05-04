@@ -27,6 +27,30 @@ test('infers stale_or_wrong_sleeper_id when player sleeper id is present', () =>
 });
 
 test('email helper returns timeout result when SMTP is unconfigured quickly', async () => {
+  const saved = {
+    DISCREPANCY_REPORT_TO_EMAIL: process.env.DISCREPANCY_REPORT_TO_EMAIL,
+    ALERT_TO_EMAIL: process.env.ALERT_TO_EMAIL,
+    SMTP_FROM: process.env.SMTP_FROM,
+    EMAIL_FROM: process.env.EMAIL_FROM,
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
+    RESEND_TO_EMAIL: process.env.RESEND_TO_EMAIL,
+  };
+
+  delete process.env.DISCREPANCY_REPORT_TO_EMAIL;
+  delete process.env.ALERT_TO_EMAIL;
+  delete process.env.SMTP_FROM;
+  delete process.env.EMAIL_FROM;
+  delete process.env.SMTP_HOST;
+  delete process.env.SMTP_USER;
+  delete process.env.SMTP_PASS;
+  delete process.env.RESEND_API_KEY;
+  delete process.env.RESEND_FROM_EMAIL;
+  delete process.env.RESEND_TO_EMAIL;
+
   const out = await sendDiscrepancyEmailWithTimeout({
     report: { playerName: 'Ahmad Hardy', leagueId: 'league-1' },
     leagueName: 'Test League',
@@ -35,6 +59,11 @@ test('email helper returns timeout result when SMTP is unconfigured quickly', as
   assert.equal(out.sent, false);
   // In local tests without SMTP env this should resolve to smtp_not_configured, not throw.
   assert.equal(typeof out.error, 'string');
+
+  for (const [key, value] of Object.entries(saved)) {
+    if (value == null) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 test('email helper returns email_timeout when send function hangs', async () => {

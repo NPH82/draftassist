@@ -67,6 +67,103 @@ function resolveSmtpIpFamily() {
   return 4;
 }
 
+function resolveResendTimeoutMs() {
+  return parseTimeoutMs(process.env.RESEND_HTTP_TIMEOUT_MS, 12000);
+}
+
+function getResendConfig() {
+  const apiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const from = sanitizeHeaderValue(process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || process.env.EMAIL_FROM || '', 320);
+  const to = sanitizeHeaderValue(process.env.RESEND_TO_EMAIL || process.env.DISCREPANCY_REPORT_TO_EMAIL || process.env.ALERT_TO_EMAIL || '', 320);
+  return {
+    enabled: !!apiKey && !!from && !!to,
+    apiKey,
+    from,
+    to,
+    timeoutMs: resolveResendTimeoutMs(),
+  };
+}
+
+async function sendDiscrepancyEmailViaResend({ report, leagueName, subject, text }) {
+  const cfg = getResendConfig();
+  const resendCtx = safeEmailContext({
+    report,
+    leagueName,
+    to: cfg.to,
+    from: cfg.from,
+    timeoutMs: cfg.timeoutMs,
+  });
+
+  if (!cfg.enabled) {
+    return { sent: false, error: 'resend_not_configured' };
+  }
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), cfg.timeoutMs);
+
+  console.info('[Devy Discrepancy Email] Resend fallback attempt started', resendCtx);
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: cfg.from,
+        to: [cfg.to],
+        subject,
+        text,
+      }),
+      signal: controller.signal,
+    });
+
+    const raw = await response.text();
+    let payload = null;
+    try {
+      payload = raw ? JSON.parse(raw) : null;
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const message = payload?.message || `resend_http_${response.status}`;
+      throw Object.assign(new Error(message), {
+        code: 'ERESEND',
+        responseCode: response.status,
+        command: 'HTTP',
+      });
+    }
+
+    console.info('[Devy Discrepancy Email] Resend fallback attempt completed', {
+      ...resendCtx,
+      responseCode: response.status,
+      messageId: payload?.id || null,
+    });
+    return { sent: true, provider: 'resend' };
+  } catch (err) {
+    const isAbort = err?.name === 'AbortError';
+    const safeErr = isAbort
+      ? {
+          name: 'AbortError',
+          message: `resend_timeout_${cfg.timeoutMs}ms`,
+          code: 'ETIMEDOUT',
+          responseCode: null,
+          command: 'HTTP',
+          errno: null,
+          syscall: null,
+        }
+      : safeEmailError(err);
+    console.error('[Devy Discrepancy Email] Resend fallback attempt failed', {
+      ...resendCtx,
+      error: safeErr,
+    });
+    throw err;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 function inferMissReason(payload = {}) {
   const allowedReasons = new Set([
     'live_roster_sync_gap',
@@ -182,12 +279,30 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
       pending: Array.isArray(info?.pending) ? info.pending.length : 0,
       response: info?.response || null,
     });
-    return { sent: true };
+    return { sent: true, provider: 'smtp' };
   } catch (err) {
     console.error('[Devy Discrepancy Email] Send attempt failed', {
       ...emailCtx,
       error: safeEmailError(err),
     });
+
+    // Fallback to HTTPS provider to avoid SMTP transport/network issues on some hosts.
+    try {
+      const resendResult = await sendDiscrepancyEmailViaResend({
+        report,
+        leagueName,
+        subject,
+        text,
+      });
+      if (resendResult?.sent) return resendResult;
+    } catch (fallbackErr) {
+      console.error('[Devy Discrepancy Email] All delivery providers failed', {
+        ...emailCtx,
+        smtpError: safeEmailError(err),
+        resendError: safeEmailError(fallbackErr),
+      });
+    }
+
     throw err;
   }
 }

@@ -156,6 +156,11 @@ Results are upserted onto all Player documents with `nflDraftYear >= 2025`. Safe
      - `SMTP_GREETING_TIMEOUT_MS` (default `8000`)
      - `SMTP_SOCKET_TIMEOUT_MS` (default `20000`)
        - `SMTP_IP_FAMILY` (default `4`) to force IPv4 DNS resolution when host networking cannot reach IPv6 SMTP endpoints
+    - Optional HTTPS fallback (recommended when SMTP egress is flaky/blocked):
+       - `RESEND_API_KEY`
+       - `RESEND_FROM_EMAIL` (must be a verified sender/domain in Resend)
+       - `RESEND_TO_EMAIL` (optional override recipient; defaults to `DISCREPANCY_REPORT_TO_EMAIL`)
+       - `RESEND_HTTP_TIMEOUT_MS` (default `12000`)
 
 Note: Free tier Render instances spin down after 15 min of inactivity. The first request after sleep takes ~30s.
 
