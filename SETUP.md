@@ -56,7 +56,8 @@ npm run hooks:install
 What this does:
 - Configures Git hooks path to `.githooks`
 - Runs `npm audit --audit-level=high` in both `backend/` and `frontend/` before every push
-- Blocks the push if either audit fails
+- Runs backend and frontend unit tests with coverage thresholds before every push
+- Blocks the push if any audit or test/coverage check fails
 
 Policy note:
 - Local hooks can technically be skipped with Git's `--no-verify` flag. Do not use it.
@@ -66,6 +67,7 @@ You can also run the same check manually anytime:
 
 ```bash
 npm run security:audit
+npm run coverage:all
 ```
 
 ### 5. GitHub non-bypass security rule (required)
@@ -77,10 +79,17 @@ Required settings:
 - Required checks:
    - `Backend -- Audit & Lint`
    - `Frontend -- Audit, Build & PWA check`
+   - `Backend -- Unit Tests & Coverage`
+   - `Frontend -- Unit Tests & Coverage`
+   - `Docs -- Required Updates Check`
 - Restrict who can push directly to `main`
 - Do not allow bypass for administrators (if your org/repo settings support this toggle)
 
 This makes vulnerability checks non-optional even if someone tries to skip local hooks.
+
+Coverage target:
+- Unit test coverage gates enforce >=95% for lines/functions/statements on unit-tested utility modules.
+- Branch coverage is still reported and tracked, but not used as a blocking threshold.
 
 ---
 

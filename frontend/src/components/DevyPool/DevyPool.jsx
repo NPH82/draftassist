@@ -22,13 +22,22 @@ function sheetVsKtcLabel(player) {
   return labels.join(' · ');
 }
 
-function DevyPlayerRow({ player, showOwner, onReportDrafted, reporting }) {
+function DevyPlayerRow({
+  player,
+  showOwner,
+  onReportDrafted,
+  onReportUiIssue,
+  reporting,
+  selectable,
+  selected,
+  onToggleSelect,
+}) {
   const val = devyValue(player);
   const posClass = `pos-${player.position}`;
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: '1fr auto auto',
+      gridTemplateColumns: '1fr auto auto auto',
       alignItems: 'center',
       gap: '0.5rem',
       padding: '0.45rem 0.6rem',
@@ -39,6 +48,14 @@ function DevyPlayerRow({ player, showOwner, onReportDrafted, reporting }) {
     }}>
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          {selectable && (
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={() => onToggleSelect?.(player)}
+              aria-label={`Select ${player.name}`}
+            />
+          )}
           <span className={posClass} style={{ fontSize: '0.7rem', fontWeight: 700, minWidth: 28 }}>
             {player.position}
           </span>
@@ -104,24 +121,44 @@ function DevyPlayerRow({ player, showOwner, onReportDrafted, reporting }) {
 
       {!showOwner && onReportDrafted && (
         <div style={{ textAlign: 'right', marginLeft: '0.4rem' }}>
-          <button
-            type="button"
-            onClick={() => onReportDrafted(player)}
-            disabled={!!reporting}
-            style={{
-              fontSize: '0.62rem',
-              border: 'none',
-              borderRadius: 4,
-              padding: '0.18rem 0.38rem',
-              cursor: reporting ? 'default' : 'pointer',
-              background: reporting ? 'var(--bg-primary)' : 'rgba(239,68,68,0.12)',
-              color: reporting ? 'var(--text-muted)' : '#f87171',
-              fontWeight: 600,
-            }}
-            title="Report this player as already drafted"
-          >
-            {reporting ? 'Sending...' : 'Report drafted'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={() => onReportDrafted(player)}
+              disabled={!!reporting}
+              style={{
+                fontSize: '0.62rem',
+                border: 'none',
+                borderRadius: 4,
+                padding: '0.18rem 0.38rem',
+                cursor: reporting ? 'default' : 'pointer',
+                background: reporting ? 'var(--bg-primary)' : 'rgba(239,68,68,0.12)',
+                color: reporting ? 'var(--text-muted)' : '#f87171',
+                fontWeight: 600,
+              }}
+              title="Report this player as already drafted"
+            >
+              {reporting ? 'Sending...' : 'Report drafted'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onReportUiIssue?.(player)}
+              disabled={!!reporting}
+              style={{
+                fontSize: '0.62rem',
+                border: 'none',
+                borderRadius: 4,
+                padding: '0.18rem 0.38rem',
+                cursor: reporting ? 'default' : 'pointer',
+                background: reporting ? 'var(--bg-primary)' : 'rgba(59,130,246,0.12)',
+                color: reporting ? 'var(--text-muted)' : '#60a5fa',
+                fontWeight: 600,
+              }}
+              title="Report this as a UI/filtering issue"
+            >
+              {reporting ? 'Sending...' : 'Report UI issue'}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -188,6 +225,9 @@ export default function DevyPool({ leagueId }) {
   const [compareMode, setCompareMode] = useState('overall'); // 'overall' | 'position'
   const [showUnknown, setShowUnknown] = useState(false);
   const [reportingKey, setReportingKey] = useState(null);
+  const [reportingBulk, setReportingBulk] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPlayers, setSelectedPlayers] = useState({});
   const [reportStatus, setReportStatus] = useState(null);
 
   useEffect(() => {
@@ -205,8 +245,17 @@ export default function DevyPool({ leagueId }) {
   if (!data) return null;
 
   const positionOptions = ['ALL', ...(data.positionFilters || SKILL_POSITIONS)];
+  const normalizePos = (value) => String(value || '').toUpperCase().trim();
+  const playerMatchesPos = (player, selectedPos) => {
+    if (selectedPos === 'ALL') return true;
+    const pos = normalizePos(player?.position);
+    if (!pos) return false;
+    if (pos === selectedPos) return true;
+    // Handle composite labels like WR/TE or LB/ED.
+    return pos.split('/').map((p) => p.trim()).includes(selectedPos);
+  };
   const filterPos = (players) =>
-    posFilter === 'ALL' ? players : players.filter(p => p.position === posFilter);
+    posFilter === 'ALL' ? players : players.filter((p) => playerMatchesPos(p, posFilter));
 
   const available = filterPos(data.available || []);
   const rostered  = filterPos(data.rostered || []);
@@ -265,6 +314,22 @@ export default function DevyPool({ leagueId }) {
     player.sleeperId || `${player.name}-${player.position || '?'}-${player.college || 'na'}`
   );
 
+  const isSelected = (player) => !!selectedPlayers[reportKeyForPlayer(player)];
+
+  function toggleSelectPlayer(player) {
+    const key = reportKeyForPlayer(player);
+    setSelectedPlayers((prev) => {
+      const next = { ...prev };
+      if (next[key]) delete next[key];
+      else next[key] = player;
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedPlayers({});
+  }
+
   async function handleReportDrafted(player) {
     const reason = window.prompt(
       `Add a quick note for why ${player.name} should be excluded (optional):`,
@@ -300,6 +365,83 @@ export default function DevyPool({ leagueId }) {
     } finally {
       setReportingKey(null);
     }
+  }
+
+  async function handleReportUiIssue(player) {
+    const note = window.prompt(
+      `Describe the UI/filter issue for ${player.name}:`,
+      `UI issue: ${player.name} appears unexpectedly in ${posFilter} filter.`
+    );
+    const key = reportKeyForPlayer(player);
+    setReportingKey(key);
+    setReportStatus(null);
+    try {
+      const res = await reportDevyDiscrepancy(leagueId, {
+        playerName: player.name,
+        playerSleeperId: player.sleeperId || null,
+        associatedPlayerId: player.associatedPlayerId || null,
+        associatedPlayerName: player.associatedPlayerName || null,
+        sourceTab: 'available',
+        suspectedMissReason: 'other',
+        note: note ? String(note).trim() : `UI issue reported for ${player.name}`,
+      });
+      setReportStatus({
+        type: 'ok',
+        message: res?.emailSent
+          ? `${player.name} UI issue reported. Email sent and learning updated.`
+          : `${player.name} UI issue saved and learning updated (email: ${res?.emailStatus || 'not sent'}).`,
+      });
+    } catch (err) {
+      setReportStatus({
+        type: 'err',
+        message: err?.response?.data?.error || `Failed to report UI issue for ${player.name}`,
+      });
+    } finally {
+      setReportingKey(null);
+    }
+  }
+
+  async function handleBulkReportDrafted() {
+    const selected = Object.values(selectedPlayers);
+    if (!selected.length) {
+      setReportStatus({ type: 'err', message: 'Select at least one player first.' });
+      return;
+    }
+    const note = window.prompt(
+      `Optional note for ${selected.length} selected player(s):`,
+      ''
+    );
+    setReportingBulk(true);
+    setReportStatus(null);
+    let okCount = 0;
+    for (const player of selected) {
+      try {
+        await reportDevyDiscrepancy(leagueId, {
+          playerName: player.name,
+          playerSleeperId: player.sleeperId || null,
+          associatedPlayerId: player.associatedPlayerId || null,
+          associatedPlayerName: player.associatedPlayerName || null,
+          sourceTab: 'available',
+          note: note ? String(note).trim() : null,
+        });
+        okCount += 1;
+      } catch {
+        // Continue to submit the remaining selections.
+      }
+    }
+
+    setReportStatus({
+      type: okCount === selected.length ? 'ok' : 'err',
+      message: okCount === selected.length
+        ? `Reported ${okCount} drafted player${okCount !== 1 ? 's' : ''} successfully.`
+        : `Reported ${okCount}/${selected.length} players. Please retry remaining ones.`,
+    });
+
+    const refreshed = await getDevyPool(leagueId);
+    setData(refreshed);
+    clearSelection();
+    setSelectionMode(false);
+    setReportingBulk(false);
   }
 
   return (
@@ -352,6 +494,39 @@ export default function DevyPool({ leagueId }) {
       {/* Available pool */}
       {tab === 'available' && (
         <div>
+          <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.45rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className={`toggle-btn${selectionMode ? ' active' : ''}`}
+              style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem' }}
+              onClick={() => {
+                setSelectionMode((s) => !s);
+                if (selectionMode) clearSelection();
+              }}
+            >
+              {selectionMode ? 'Exit select mode' : 'Select players'}
+            </button>
+            {selectionMode && (
+              <>
+                <button
+                  type="button"
+                  style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem', borderRadius: 5, border: 'none', cursor: reportingBulk ? 'default' : 'pointer', background: reportingBulk ? 'var(--bg-secondary)' : 'rgba(239,68,68,0.12)', color: reportingBulk ? 'var(--text-muted)' : '#f87171', fontWeight: 600 }}
+                  onClick={handleBulkReportDrafted}
+                  disabled={reportingBulk}
+                >
+                  {reportingBulk ? 'Submitting...' : `Report selected drafted (${Object.keys(selectedPlayers).length})`}
+                </button>
+                <button
+                  type="button"
+                  style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem', borderRadius: 5, border: 'none', cursor: 'pointer', background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
+                  onClick={clearSelection}
+                >
+                  Clear selection
+                </button>
+              </>
+            )}
+          </div>
+
           {reportStatus && (
             <div
               className="text-xs"
@@ -375,7 +550,11 @@ export default function DevyPool({ leagueId }) {
                 player={p}
                 showOwner={false}
                 onReportDrafted={handleReportDrafted}
+                onReportUiIssue={handleReportUiIssue}
                 reporting={reportingKey === reportKeyForPlayer(p)}
+                selectable={selectionMode}
+                selected={isSelected(p)}
+                onToggleSelect={toggleSelectPlayer}
               />
             ))
           )}

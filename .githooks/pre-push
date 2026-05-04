@@ -4,25 +4,13 @@ set -eu
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-run_audit() {
-  target_dir="$1"
+echo "[pre-push] Running security audit gate"
+(cd "$ROOT_DIR" && npm run security:audit)
 
-  if [ ! -d "$ROOT_DIR/$target_dir" ]; then
-    echo "[security] Skip: $target_dir not found"
-    return 0
-  fi
+echo "[pre-push] Running backend unit tests with coverage threshold"
+(cd "$ROOT_DIR/backend" && npm run test:coverage)
 
-  if [ ! -f "$ROOT_DIR/$target_dir/package.json" ]; then
-    echo "[security] Skip: $target_dir/package.json not found"
-    return 0
-  fi
+echo "[pre-push] Running frontend unit tests with coverage threshold"
+(cd "$ROOT_DIR/frontend" && npm run test:coverage)
 
-  echo "[security] Auditing $target_dir (high severity threshold)..."
-  (cd "$ROOT_DIR/$target_dir" && npm audit --audit-level=high)
-}
-
-echo "[security] Running local pre-push vulnerability gate"
-run_audit "backend"
-run_audit "frontend"
-
-echo "[security] Passed: no high-severity vulnerabilities found"
+echo "[pre-push] Passed: audit + tests + coverage gates"

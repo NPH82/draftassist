@@ -65,6 +65,8 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **Devy pool hardening for drafted/duplicate misses**: pool build now overlays DB rosters with live Sleeper rosters, excludes picked players regardless of draft status (in-progress or complete), excludes full roster membership (`allRosterIds`), and dedupes rostered/available rows by canonical identity (owner + devy identity for rostered, sleeperId/name+position for available)
 - **Alias mismatch fallback exclusion added**: reverse fuzzy matching now excludes available DB records when note-candidate names map back to the same player despite name variations/typos (e.g., `Nate/Nathan`, `Frazier/Fraizer`, truncated school suffixes)
 - **User-reported devy discrepancy workflow added**: available devy rows now expose a `Report drafted` action that submits a discrepancy report; backend persists report reason/details in `DevyDiscrepancyReport`, applies learning updates to `ManagerProfile`, and sends a maintainer email via SMTP when configured
+- **PR quality gates enforced**: merges to `main` are now expected to require passing security audits, backend/frontend unit tests with coverage thresholds, and a docs-update guard that fails when source code changes without updates to `spec.md` and/or `SETUP.md`
+- **Local pre-push gate expanded**: repo hooks now run security audit plus backend/frontend coverage checks before push to reduce CI churn and catch regressions earlier
 
 ---
 

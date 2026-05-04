@@ -1,7 +1,10 @@
 {
   "scripts": {
     "hooks:install": "git config core.hooksPath .githooks",
-    "security:audit": "npm audit --audit-level=high --prefix backend && npm audit --audit-level=high --prefix frontend"
+    "security:audit": "npm audit --audit-level=high --prefix backend && npm audit --audit-level=high --prefix frontend",
+    "test:all": "npm test --prefix backend && npm test --prefix frontend",
+    "coverage:all": "npm run test:coverage --prefix backend && npm run test:coverage --prefix frontend",
+    "docs:check": "node ./scripts/docs-check.mjs"
   },
   "dependencies": {
     "axios": "^1.15.2",

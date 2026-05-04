@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:coverage": "c8 --all --include=src/utils/**/*.js --reporter=text --reporter=lcov --check-coverage --lines 95 --functions 95 --statements 95 node --test"
   },
   "keywords": [],
   "author": "",
@@ -23,5 +24,8 @@
     "mongoose": "^9.5.0",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.7"
+  },
+  "devDependencies": {
+    "c8": "^11.0.0"
   }
 }

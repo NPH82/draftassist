@@ -45,4 +45,20 @@ export default defineConfig({
       },
     },
   },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{js,jsx}'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov'],
+      all: true,
+      include: ['src/utils/**/*.js'],
+      thresholds: {
+        lines: 95,
+        functions: 95,
+        branches: 80,
+        statements: 95,
+      },
+    },
+  },
 });

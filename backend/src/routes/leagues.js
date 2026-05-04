@@ -26,6 +26,7 @@ const DevyOwnershipSnapshot = require('../models/DevyOwnershipSnapshot');
 const DevyDiscrepancyReport = require('../models/DevyDiscrepancyReport');
 const { extractDevyCandidatesFromAlias } = require('../utils/devyNoteParser');
 const { normalizeComparableName, scoreComparableNameMatch } = require('../utils/devyNameMatcher');
+const { shouldExcludeAvailableByDrafted } = require('../utils/devyPoolDraftExclusion');
 
 const KTC_TO_FP = 68 / 9500;
 const SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
@@ -1290,12 +1291,25 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     // Exclude players picked in the league draft — covers both in-progress and recently
     // completed drafts (Sleeper roster sync lags behind pick data after completion).
     const draftedPlayerIds = new Set();
+    const draftedPlayerNames = new Set();
     if (league.draftId) {
       try {
         const draftPicks = await sleeperService.getDraftPicks(league.draftId);
         for (const pick of (draftPicks || [])) {
           const playerId = String(pick?.player_id || '').trim();
           if (playerId) draftedPlayerIds.add(playerId);
+
+          const sp = playerId ? sleeperPlayerMap[playerId] : null;
+          const sleeperName = sp
+            ? (sp.full_name || `${sp.first_name || ''} ${sp.last_name || ''}`.trim())
+            : '';
+          const metaName = [pick?.metadata?.first_name, pick?.metadata?.last_name]
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+          const pickName = sleeperName || metaName || String(pick?.metadata?.player || '').trim();
+          const normalizedPickName = normalizeName(pickName);
+          if (normalizedPickName) draftedPlayerNames.add(normalizedPickName);
         }
       } catch (e) {
         console.warn('[DevyPool] Draft picks unavailable:', e.message);
@@ -1768,8 +1782,14 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     const currentYear = new Date().getFullYear();
     const availableCandidates = devyDbPlayers
       .filter(p => {
-        // Exclude players already picked in the current draft (live or complete).
-        if (p.sleeperId && draftedPlayerIds.has(p.sleeperId)) return false;
+        // Exclude players already picked in the current draft (live or complete),
+        // including stale-id and name-variant fallback matching.
+        if (shouldExcludeAvailableByDrafted({
+          playerName: p.name,
+          playerSleeperId: p.sleeperId,
+          draftedPlayerIds,
+          draftedPlayerNames,
+        })) return false;
         // Exclude any player already rostered/taxi in this league.
         if (p.sleeperId && allRosterIds.has(p.sleeperId)) return false;
         // Exclude players currently rostered in this league (by sleeperId or name).
@@ -1781,6 +1801,8 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         const pNorm = normalizeName(p.name);
         if (rosteredNames.has(pNorm)) return false;
         if (rosteredDevyNames.has(pNorm)) return false;
+        if (draftedPlayerNames.has(pNorm)) return false;
+
         // Reverse fuzzy: if any rostered candidate name resolves back to this player, exclude.
         for (const candidateNorm of rosteredCandidateNames) {
           if (candidateNorm === pNorm) continue; // already caught above
