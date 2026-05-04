@@ -77,6 +77,7 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **PR quality gates enforced**: merges to `main` are now expected to require passing security audits, backend/frontend unit tests with coverage thresholds, and a docs-update guard that fails when source code changes without updates to `spec.md` and/or `SETUP.md`
 - **Local pre-push gate expanded**: repo hooks now run security audit plus backend/frontend coverage checks before push to reduce CI churn and catch regressions earlier
 - **Docs-update rule enforced locally**: a new pre-commit hook now blocks commits when app code changes without staged updates to `spec.md` and/or `SETUP.md`; pre-push also runs `docs:check` to block outgoing pushes that violate the docs rule across commit range
+- **Coverage directories gitignored**: `backend/coverage/` and `frontend/coverage/` are now excluded from version control; test-run artifacts are regenerated on each `npm test` run and do not need to be tracked
 
 ---
 

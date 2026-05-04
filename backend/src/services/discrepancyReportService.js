@@ -95,6 +95,7 @@ async function sendDiscrepancyEmailViaResend({ report, leagueName, subject, text
   });
 
   if (!cfg.enabled) {
+    console.warn('[Devy Discrepancy Email] Resend fallback unavailable (not configured)', resendCtx);
     return { sent: false, error: 'resend_not_configured' };
   }
 
@@ -164,6 +165,38 @@ async function sendDiscrepancyEmailViaResend({ report, leagueName, subject, text
   }
 }
 
+async function resolveSmtpConnectHost(host, family) {
+  if (!String(host || '').trim()) {
+    return {
+      connectHost: host,
+      resolvedAddress: null,
+      resolvedFamily: null,
+    };
+  }
+
+  try {
+    const resolved = await dns.promises.lookup(host, {
+      family,
+      all: false,
+      verbatim: false,
+    });
+    if (resolved?.address) {
+      return {
+        connectHost: resolved.address,
+        resolvedAddress: resolved.address,
+        resolvedFamily: resolved.family || null,
+      };
+    }
+  } catch {
+    // Fall back to original hostname if resolution fails.
+  }
+  return {
+    connectHost: host,
+    resolvedAddress: null,
+    resolvedFamily: null,
+  };
+}
+
 function inferMissReason(payload = {}) {
   const allowedReasons = new Set([
     'live_roster_sync_gap',
@@ -216,6 +249,11 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
   const greetingTimeoutMs = parseTimeoutMs(process.env.SMTP_GREETING_TIMEOUT_MS, 8000);
   const socketTimeoutMs = parseTimeoutMs(process.env.SMTP_SOCKET_TIMEOUT_MS, 20000);
   const smtpIpFamily = resolveSmtpIpFamily();
+  const {
+    connectHost,
+    resolvedAddress,
+    resolvedFamily,
+  } = await resolveSmtpConnectHost(host, smtpIpFamily);
 
   const emailCtx = safeEmailContext({
     report,
@@ -243,7 +281,7 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
   }
 
   const transporter = nodemailer.createTransport({
-    host,
+    host: connectHost,
     port,
     secure,
     family: smtpIpFamily,
@@ -255,6 +293,10 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
     greetingTimeout: greetingTimeoutMs,
     socketTimeout: socketTimeoutMs,
     auth: { user, pass },
+    tls: {
+      // Keep TLS SNI and cert validation bound to the canonical SMTP host.
+      servername: host,
+    },
   });
 
   const safePlayerName = sanitizeHeaderValue(report?.playerName || 'unknown player', 120);
@@ -265,6 +307,9 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
   console.info('[Devy Discrepancy Email] Send attempt started', {
     ...emailCtx,
     smtpIpFamily,
+    connectHost,
+    resolvedAddress,
+    resolvedFamily,
     connectionTimeoutMs,
     greetingTimeoutMs,
     socketTimeoutMs,
