@@ -480,8 +480,27 @@ async function refreshDevyRankings() {
 
   const deduped = await dedupeDevyPlayers();
 
+  // Sweep out any devy players whose draft class has already passed.
+  // Scraper-sourced records use devyClass (not nflDraftYear), so this is the
+  // authoritative graduation check for the available pool.
+  const graduationYear = new Date().getFullYear();
+  const graduationResult = await Player.updateMany(
+    {
+      isDevy: true,
+      devyClass: { $lte: graduationYear },
+    },
+    { $set: { isDevy: false, lastUpdated: new Date() } }
+  ).catch((e) => {
+    console.warn('[Scraper] refreshDevyRankings: graduation sweep failed:', e.message);
+    return { modifiedCount: 0 };
+  });
+  const graduated = graduationResult.modifiedCount || 0;
+  if (graduated > 0) {
+    console.log(`[Scraper] refreshDevyRankings: cleared isDevy from ${graduated} graduated players (devyClass <= ${graduationYear})`);
+  }
+
   console.log(
-    `[Scraper] refreshDevyRankings: ${created} created, ${updated} updated, ${deduped} deduped ` +
+    `[Scraper] refreshDevyRankings: ${created} created, ${updated} updated, ${deduped} deduped, ${graduated} graduated ` +
     `| KTC: ${ktcResult.data?.length ?? 0} | NFLMDB: ${nflmdbResult.data?.length ?? 0}` +
     ` | FP: ${fpResult.data?.length ?? 0} | Sheet: ${sheetResult.data?.length ?? 0}`
   );
@@ -490,6 +509,7 @@ async function refreshDevyRankings() {
     created,
     updated,
     deduped,
+    graduated,
     sources: {
       ktc:    { ok: ktcResult.ok,    count: ktcResult.data?.length ?? 0 },
       nflmdb: { ok: nflmdbResult.ok, count: nflmdbResult.data?.length ?? 0 },

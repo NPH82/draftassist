@@ -385,13 +385,26 @@ router.post('/fix-devy-flags', requireAuth, async (req, res) => {
       return yearsExp === 0 && !sp.team && !!sp.college;
     };
 
-    const devyPlayers = await Player.find({ isDevy: true }).select('_id sleeperId name').lean();
+    const devyPlayers = await Player.find({ isDevy: true }).select('_id sleeperId name devyClass nflDraftYear').lean();
     let cleared = 0;
     let kept = 0;
     const clearedNames = [];
+    const currentYear = new Date().getFullYear();
 
     for (const p of devyPlayers) {
-      if (!p.sleeperId) { kept++; continue; } // no Sleeper link — leave alone
+      // For scraper-sourced players without a Sleeper ID, use devyClass or nflDraftYear
+      // as the graduation signal — these are the fields populated by KTC/NFLMDB/Sheet.
+      if (!p.sleeperId) {
+        const gradYear = Number(p.devyClass || p.nflDraftYear || 0);
+        if (Number.isFinite(gradYear) && gradYear > 0 && gradYear <= currentYear) {
+          await Player.updateOne({ _id: p._id }, { $set: { isDevy: false } });
+          cleared++;
+          if (clearedNames.length < 40) clearedNames.push(p.name);
+        } else {
+          kept++;
+        }
+        continue;
+      }
       const sp = sleeperMap[p.sleeperId];
       if (isValidDevy(sp)) {
         kept++;

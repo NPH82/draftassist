@@ -1888,6 +1888,9 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
         // If the player already has an NFL draft year at or before current year,
         // they have graduated from devy availability.
         if (Number.isFinite(Number(p.nflDraftYear)) && Number(p.nflDraftYear) <= currentYear) return false;
+        // devyClass is the primary graduation field for scraper-sourced players
+        // (KTC/NFLMDB/Sheet records store expected draft year here, not nflDraftYear).
+        if (Number.isFinite(Number(p.devyClass)) && Number(p.devyClass) <= currentYear) return false;
         return true;
       })
       .map(p => {
