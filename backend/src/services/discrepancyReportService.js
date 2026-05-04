@@ -1,4 +1,5 @@
 let nodemailer = null;
+const dns = require('node:dns');
 try {
   // Optional dependency; reports are still stored even when email is unavailable.
   nodemailer = require('nodemailer');
@@ -43,6 +44,14 @@ function safeEmailError(err) {
   };
 }
 
+function sanitizeHeaderValue(value, maxLen = 240) {
+  return String(value || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
 function parseTimeoutMs(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -50,6 +59,12 @@ function parseTimeoutMs(value, fallback) {
 
 function resolveDiscrepancyEmailTimeoutMs() {
   return parseTimeoutMs(process.env.DISCREPANCY_EMAIL_TIMEOUT_MS, 25000);
+}
+
+function resolveSmtpIpFamily() {
+  const raw = String(process.env.SMTP_IP_FAMILY || '4').trim();
+  if (raw === '6') return 6;
+  return 4;
 }
 
 function inferMissReason(payload = {}) {
@@ -93,8 +108,8 @@ function buildEmailBody({ report, leagueName }) {
 }
 
 async function sendDiscrepancyEmail({ report, leagueName }) {
-  const to = process.env.DISCREPANCY_REPORT_TO_EMAIL || process.env.ALERT_TO_EMAIL || '';
-  const from = process.env.SMTP_FROM || process.env.EMAIL_FROM || '';
+  const to = sanitizeHeaderValue(process.env.DISCREPANCY_REPORT_TO_EMAIL || process.env.ALERT_TO_EMAIL || '', 320);
+  const from = sanitizeHeaderValue(process.env.SMTP_FROM || process.env.EMAIL_FROM || '', 320);
   const host = process.env.SMTP_HOST || '';
   const user = process.env.SMTP_USER || '';
   const pass = process.env.SMTP_PASS || '';
@@ -103,6 +118,7 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
   const connectionTimeoutMs = parseTimeoutMs(process.env.SMTP_CONNECTION_TIMEOUT_MS, 8000);
   const greetingTimeoutMs = parseTimeoutMs(process.env.SMTP_GREETING_TIMEOUT_MS, 8000);
   const socketTimeoutMs = parseTimeoutMs(process.env.SMTP_SOCKET_TIMEOUT_MS, 20000);
+  const smtpIpFamily = resolveSmtpIpFamily();
 
   const emailCtx = safeEmailContext({
     report,
@@ -133,17 +149,25 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
     host,
     port,
     secure,
+    family: smtpIpFamily,
+    // Force IPv4 by default on hosts where IPv6 egress is unavailable (e.g. some free-tier runtimes).
+    lookup: (hostname, options, callback) => {
+      dns.lookup(hostname, { ...(options || {}), family: smtpIpFamily, all: false }, callback);
+    },
     connectionTimeout: connectionTimeoutMs,
     greetingTimeout: greetingTimeoutMs,
     socketTimeout: socketTimeoutMs,
     auth: { user, pass },
   });
 
-  const subject = `[DraftAssistant] Devy discrepancy: ${report.playerName} (${report.leagueId})`;
+  const safePlayerName = sanitizeHeaderValue(report?.playerName || 'unknown player', 120);
+  const safeLeagueId = sanitizeHeaderValue(report?.leagueId || 'unknown-league', 80);
+  const subject = `[DraftAssistant] Devy discrepancy: ${safePlayerName} (${safeLeagueId})`;
   const text = buildEmailBody({ report, leagueName });
 
   console.info('[Devy Discrepancy Email] Send attempt started', {
     ...emailCtx,
+    smtpIpFamily,
     connectionTimeoutMs,
     greetingTimeoutMs,
     socketTimeoutMs,

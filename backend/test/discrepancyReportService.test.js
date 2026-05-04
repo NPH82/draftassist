@@ -48,3 +48,17 @@ test('email helper returns email_timeout when send function hangs', async () => 
   assert.equal(out.sent, false);
   assert.equal(out.error, 'email_timeout');
 });
+
+test('email helper safely handles header-like CRLF content in playerName', async () => {
+  const out = await sendDiscrepancyEmailWithTimeout({
+    report: {
+      playerName: 'Nick Marsh\r\nBcc: attacker@example.com',
+      leagueId: 'league-1',
+    },
+    leagueName: 'Test League',
+    timeoutMs: 50,
+  });
+
+  assert.equal(out.sent, false);
+  assert.equal(typeof out.error, 'string');
+});

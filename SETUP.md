@@ -155,6 +155,7 @@ Results are upserted onto all Player documents with `nflDraftYear >= 2025`. Safe
      - `SMTP_CONNECTION_TIMEOUT_MS` (default `8000`)
      - `SMTP_GREETING_TIMEOUT_MS` (default `8000`)
      - `SMTP_SOCKET_TIMEOUT_MS` (default `20000`)
+       - `SMTP_IP_FAMILY` (default `4`) to force IPv4 DNS resolution when host networking cannot reach IPv6 SMTP endpoints
 
 Note: Free tier Render instances spin down after 15 min of inactivity. The first request after sleep takes ~30s.
 
