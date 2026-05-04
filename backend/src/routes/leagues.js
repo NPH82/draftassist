@@ -18,7 +18,11 @@ const { ingestCompletedDraftTrends } = require('../services/draftTrendService');
 const { generateBuySellAlerts } = require('../services/alertService');
 const { calcPersonalRankScore } = require('../services/scoringEngine');
 const { ingestDevyDiscrepancyReport } = require('../services/learningEngine');
-const { inferMissReason, sendDiscrepancyEmailWithTimeout } = require('../services/discrepancyReportService');
+const {
+  inferMissReason,
+  sendDiscrepancyEmailWithTimeout,
+  resolveDiscrepancyEmailTimeoutMs,
+} = require('../services/discrepancyReportService');
 const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
@@ -1135,7 +1139,11 @@ router.post('/:leagueId/devy-discrepancy', requireAuth, async (req, res) => {
 
     let emailResult = { sent: false, error: 'email_failed' };
     try {
-      emailResult = await sendDiscrepancyEmailWithTimeout({ report, leagueName: league.name, timeoutMs: 12000 });
+      emailResult = await sendDiscrepancyEmailWithTimeout({
+        report,
+        leagueName: league.name,
+        timeoutMs: resolveDiscrepancyEmailTimeoutMs(),
+      });
     } catch (emailErr) {
       emailResult = { sent: false, error: emailErr.message || 'email_send_failed' };
       console.warn('[Devy Discrepancy] Email send failed:', emailErr.message);

@@ -43,6 +43,15 @@ function safeEmailError(err) {
   };
 }
 
+function parseTimeoutMs(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function resolveDiscrepancyEmailTimeoutMs() {
+  return parseTimeoutMs(process.env.DISCREPANCY_EMAIL_TIMEOUT_MS, 25000);
+}
+
 function inferMissReason(payload = {}) {
   const allowedReasons = new Set([
     'live_roster_sync_gap',
@@ -91,6 +100,9 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
   const pass = process.env.SMTP_PASS || '';
   const port = Number(process.env.SMTP_PORT || 587);
   const secure = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
+  const connectionTimeoutMs = parseTimeoutMs(process.env.SMTP_CONNECTION_TIMEOUT_MS, 8000);
+  const greetingTimeoutMs = parseTimeoutMs(process.env.SMTP_GREETING_TIMEOUT_MS, 8000);
+  const socketTimeoutMs = parseTimeoutMs(process.env.SMTP_SOCKET_TIMEOUT_MS, 20000);
 
   const emailCtx = safeEmailContext({
     report,
@@ -121,13 +133,21 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
     host,
     port,
     secure,
+    connectionTimeout: connectionTimeoutMs,
+    greetingTimeout: greetingTimeoutMs,
+    socketTimeout: socketTimeoutMs,
     auth: { user, pass },
   });
 
   const subject = `[DraftAssistant] Devy discrepancy: ${report.playerName} (${report.leagueId})`;
   const text = buildEmailBody({ report, leagueName });
 
-  console.info('[Devy Discrepancy Email] Send attempt started', emailCtx);
+  console.info('[Devy Discrepancy Email] Send attempt started', {
+    ...emailCtx,
+    connectionTimeoutMs,
+    greetingTimeoutMs,
+    socketTimeoutMs,
+  });
   try {
     const info = await transporter.sendMail({ from, to, subject, text });
     console.info('[Devy Discrepancy Email] Send attempt completed', {
@@ -151,11 +171,11 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
 async function sendDiscrepancyEmailWithTimeout({
   report,
   leagueName,
-  timeoutMs = 4000,
+  timeoutMs = resolveDiscrepancyEmailTimeoutMs(),
   sendFn = sendDiscrepancyEmail,
 }) {
   const ms = Number(timeoutMs);
-  const safeTimeout = Number.isFinite(ms) && ms > 0 ? ms : 4000;
+  const safeTimeout = Number.isFinite(ms) && ms > 0 ? ms : resolveDiscrepancyEmailTimeoutMs();
   const startedAt = Date.now();
 
   console.info('[Devy Discrepancy Email] Timeout wrapper started', safeEmailContext({
@@ -215,4 +235,5 @@ module.exports = {
   inferMissReason,
   sendDiscrepancyEmail,
   sendDiscrepancyEmailWithTimeout,
+  resolveDiscrepancyEmailTimeoutMs,
 };

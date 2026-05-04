@@ -150,6 +150,11 @@ Results are upserted onto all Player documents with `nflDraftYear >= 2025`. Safe
    - `NODE_ENV=production`
    - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` — required for devy discrepancy report emails (Gmail: host=`smtp.gmail.com`, port=`587`, secure=`false`, user/from=Gmail address, pass=16-char App Password)
    - `DISCREPANCY_REPORT_TO_EMAIL` — address that receives devy discrepancy report notifications
+   - Optional timeout tuning for slower hosts:
+     - `DISCREPANCY_EMAIL_TIMEOUT_MS` (default `25000`)
+     - `SMTP_CONNECTION_TIMEOUT_MS` (default `8000`)
+     - `SMTP_GREETING_TIMEOUT_MS` (default `8000`)
+     - `SMTP_SOCKET_TIMEOUT_MS` (default `20000`)
 
 Note: Free tier Render instances spin down after 15 min of inactivity. The first request after sleep takes ~30s.
 
