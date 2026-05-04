@@ -483,20 +483,24 @@ async function refreshDevyRankings() {
   // Sweep out any devy players whose draft class has already passed.
   // Scraper-sourced records use devyClass (not nflDraftYear), so this is the
   // authoritative graduation check for the available pool.
+  // Past classes (< currentYear) are always fully done.
+  // Current-year class players who went undrafted or returned to school are
+  // still devy-eligible — only clear current-year players who also have a
+  // team set in our DB (confirmed NFL roster placement).
   const graduationYear = new Date().getFullYear();
-  const graduationResult = await Player.updateMany(
-    {
-      isDevy: true,
-      devyClass: { $lte: graduationYear },
-    },
-    { $set: { isDevy: false, lastUpdated: new Date() } }
-  ).catch((e) => {
-    console.warn('[Scraper] refreshDevyRankings: graduation sweep failed:', e.message);
-    return { modifiedCount: 0 };
-  });
-  const graduated = graduationResult.modifiedCount || 0;
+  const [pastResult, currentResult] = await Promise.all([
+    Player.updateMany(
+      { isDevy: true, devyClass: { $lt: graduationYear } },
+      { $set: { isDevy: false, lastUpdated: new Date() } }
+    ).catch((e) => { console.warn('[Scraper] graduation sweep (past) failed:', e.message); return { modifiedCount: 0 }; }),
+    Player.updateMany(
+      { isDevy: true, devyClass: graduationYear, team: { $nin: [null, ''] } },
+      { $set: { isDevy: false, lastUpdated: new Date() } }
+    ).catch((e) => { console.warn('[Scraper] graduation sweep (current+team) failed:', e.message); return { modifiedCount: 0 }; }),
+  ]);
+  const graduated = (pastResult.modifiedCount || 0) + (currentResult.modifiedCount || 0);
   if (graduated > 0) {
-    console.log(`[Scraper] refreshDevyRankings: cleared isDevy from ${graduated} graduated players (devyClass <= ${graduationYear})`);
+    console.log(`[Scraper] refreshDevyRankings: cleared isDevy from ${graduated} graduated players (past class or current class+team)`);
   }
 
   console.log(

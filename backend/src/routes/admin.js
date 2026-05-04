@@ -385,7 +385,7 @@ router.post('/fix-devy-flags', requireAuth, async (req, res) => {
       return yearsExp === 0 && !sp.team && !!sp.college;
     };
 
-    const devyPlayers = await Player.find({ isDevy: true }).select('_id sleeperId name devyClass nflDraftYear').lean();
+    const devyPlayers = await Player.find({ isDevy: true }).select('_id sleeperId name devyClass nflDraftYear team').lean();
     let cleared = 0;
     let kept = 0;
     const clearedNames = [];
@@ -396,7 +396,11 @@ router.post('/fix-devy-flags', requireAuth, async (req, res) => {
       // as the graduation signal — these are the fields populated by KTC/NFLMDB/Sheet.
       if (!p.sleeperId) {
         const gradYear = Number(p.devyClass || p.nflDraftYear || 0);
-        if (Number.isFinite(gradYear) && gradYear > 0 && gradYear <= currentYear) {
+        // Past classes are always done. Current-year class only clears if we
+        // know they landed on an NFL team (p.team set); undrafted/returned players stay.
+        const isPastClass = Number.isFinite(gradYear) && gradYear > 0 && gradYear < currentYear;
+        const isCurrentClassDrafted = Number.isFinite(gradYear) && gradYear === currentYear && !!p.team;
+        if (isPastClass || isCurrentClassDrafted) {
           await Player.updateOne({ _id: p._id }, { $set: { isDevy: false } });
           cleared++;
           if (clearedNames.length < 40) clearedNames.push(p.name);

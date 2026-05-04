@@ -1553,7 +1553,7 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     }
     // Load devy players from our DB
     const devyDbPlayers = await Player.find({ isDevy: true })
-      .select('sleeperId name position college devyClass devyKtcValue devyKtcRank ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age nflDraftYear sheetRank sheetRating sheetAvgOvrRank')
+      .select('sleeperId name position college team devyClass devyKtcValue devyKtcRank ktcValue fantasyProsValue fantasyProsRank underdogAdp dasScore age nflDraftYear sheetRank sheetRating sheetAvgOvrRank')
       .lean();
 
     const devyBySleeperID = Object.fromEntries(devyDbPlayers.map(p => [p.sleeperId, p]));
@@ -1885,12 +1885,19 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
           if (score >= 70) return false;
         }
 
-        // If the player already has an NFL draft year at or before current year,
-        // they have graduated from devy availability.
+        // If the player has an explicit NFL draft year at or before current year they've
+        // graduated. nflDraftYear is only set when we know they were actually picked.
         if (Number.isFinite(Number(p.nflDraftYear)) && Number(p.nflDraftYear) <= currentYear) return false;
         // devyClass is the primary graduation field for scraper-sourced players
         // (KTC/NFLMDB/Sheet records store expected draft year here, not nflDraftYear).
-        if (Number.isFinite(Number(p.devyClass)) && Number(p.devyClass) <= currentYear) return false;
+        // Past classes (< currentYear) are always done. Current-year class players
+        // who went undrafted or returned to school are still devy-eligible — exclude
+        // current-year only when we also know they landed on an NFL team (p.team set).
+        const devyClassNum = Number(p.devyClass);
+        if (Number.isFinite(devyClassNum)) {
+          if (devyClassNum < currentYear) return false;
+          if (devyClassNum === currentYear && p.team) return false;
+        }
         return true;
       })
       .map(p => {
