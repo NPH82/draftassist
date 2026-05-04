@@ -219,6 +219,15 @@ export default function DevyPool({ leagueId }) {
       .then(setData)
       .catch(err => setError(err?.response?.data?.error || 'Failed to load devy pool'))
       .finally(() => setLoading(false));
+
+    // Quietly re-fetch in the background so players drafted mid-session
+    // are excluded without the user having to manually refresh.
+    const interval = setInterval(() => {
+      getDevyPool(leagueId)
+        .then(setData)
+        .catch(() => { /* silent — don't clobber a visible error */ });
+    }, 45_000);
+    return () => clearInterval(interval);
   }, [leagueId]);
 
   if (loading) return <div className="text-xs text-muted" style={{ padding: '0.5rem' }}>Loading devy pool…</div>;
@@ -330,9 +339,7 @@ export default function DevyPool({ leagueId }) {
       });
       setReportStatus({
         type: 'ok',
-        message: res?.emailSent
-          ? `${player.name} reported. Email sent and learning updated.`
-          : `${player.name} reported. Saved and learning updated (email: ${res?.emailStatus || 'not sent'}).`,
+        message: `${player.name} reported. Saved and learning updated.`,
       });
 
       // Refresh pool after report so any newly-caught matches disappear immediately.

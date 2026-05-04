@@ -148,6 +148,8 @@ Results are upserted onto all Player documents with `nflDraftYear >= 2025`. Safe
    - `MONGODB_URI` (from Atlas)
    - `FRONTEND_URL` (your Vercel URL, e.g. `https://draftassist.vercel.app`)
    - `NODE_ENV=production`
+   - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` — required for devy discrepancy report emails (Gmail: host=`smtp.gmail.com`, port=`587`, secure=`false`, user/from=Gmail address, pass=16-char App Password)
+   - `DISCREPANCY_REPORT_TO_EMAIL` — address that receives devy discrepancy report notifications
 
 Note: Free tier Render instances spin down after 15 min of inactivity. The first request after sleep takes ~30s.
 

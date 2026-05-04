@@ -65,6 +65,8 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **Devy pool hardening for drafted/duplicate misses**: pool build now overlays DB rosters with live Sleeper rosters, excludes picked players regardless of draft status (in-progress or complete), excludes full roster membership (`allRosterIds`), and dedupes rostered/available rows by canonical identity (owner + devy identity for rostered, sleeperId/name+position for available)
 - **Alias mismatch fallback exclusion added**: reverse fuzzy matching now excludes available DB records when note-candidate names map back to the same player despite name variations/typos (e.g., `Nate/Nathan`, `Frazier/Fraizer`, truncated school suffixes)
 - **User-reported devy discrepancy workflow added**: available devy rows now expose a `Report drafted` action that submits a discrepancy report; backend persists report reason/details in `DevyDiscrepancyReport`, applies learning updates to `ManagerProfile`, and sends a maintainer email via SMTP when configured
+- **Devy pool background refresh**: the `DevyPool` component re-fetches automatically every 45 seconds so picks made mid-session are excluded without a manual page reload; background errors are silently swallowed to avoid overwriting visible error state
+- **Reversed-name drafted exclusion**: exclusion logic now handles token-order mismatches (e.g. `Hardy Ahmad` vs `Ahmad Hardy`) so drafted players are not shown as available regardless of name-field direction in the source data
 - **PR quality gates enforced**: merges to `main` are now expected to require passing security audits, backend/frontend unit tests with coverage thresholds, and a docs-update guard that fails when source code changes without updates to `spec.md` and/or `SETUP.md`
 - **Local pre-push gate expanded**: repo hooks now run security audit plus backend/frontend coverage checks before push to reduce CI churn and catch regressions earlier
 - **Docs-update rule enforced locally**: a new pre-commit hook now blocks commits when app code changes without staged updates to `spec.md` and/or `SETUP.md`; pre-push also runs `docs:check` to block outgoing pushes that violate the docs rule across commit range
@@ -412,7 +414,7 @@ The starting dynasty board is seeded from a Claude-generated Top 48 dynasty rook
 - Endpoint: `POST /api/leagues/:leagueId/devy-discrepancy`
 - Captures: player identity, league context, source tab, user note, and inferred/specified miss reason
 - Persistence: stored in `DevyDiscrepancyReport` with `learningApplied` + `emailSent` status fields
-- Notification: sends maintainer email when SMTP env vars are configured (`DISCREPANCY_REPORT_TO_EMAIL`, `SMTP_*`)
+- Notification: sends maintainer email when SMTP env vars are configured (`DISCREPANCY_REPORT_TO_EMAIL`, `SMTP_*`); email send has a 12s timeout to accommodate slower outbound connections on free-tier hosting
 - Learning integration: report ingestion updates `ManagerProfile.devyMissReasonCounts`, increments discrepancy totals, and appends a learning/scouting note
 
 ---

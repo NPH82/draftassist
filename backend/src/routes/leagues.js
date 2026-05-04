@@ -1135,7 +1135,7 @@ router.post('/:leagueId/devy-discrepancy', requireAuth, async (req, res) => {
 
     let emailResult = { sent: false, error: 'email_failed' };
     try {
-      emailResult = await sendDiscrepancyEmailWithTimeout({ report, leagueName: league.name, timeoutMs: 4000 });
+      emailResult = await sendDiscrepancyEmailWithTimeout({ report, leagueName: league.name, timeoutMs: 12000 });
     } catch (emailErr) {
       emailResult = { sent: false, error: emailErr.message || 'email_send_failed' };
       console.warn('[Devy Discrepancy] Email send failed:', emailErr.message);
