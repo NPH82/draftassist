@@ -55,10 +55,12 @@ npm run hooks:install
 
 What this does:
 - Configures Git hooks path to `.githooks`
+- Enforces a docs-update rule on commit: if app code changes, `spec.md` and/or `SETUP.md` must be updated in the same commit
 - Runs backend and frontend unit tests after each commit (`post-commit`)
 - Runs `npm audit --audit-level=high` in both `backend/` and `frontend/` before every push
 - Runs backend and frontend unit tests with coverage thresholds before every push
-- Blocks the push if any audit or test/coverage check fails
+- Runs docs-check before every push
+- Blocks the push if any audit, test/coverage, or docs-check gate fails
 
 Policy note:
 - Local hooks can technically be skipped with Git's `--no-verify` flag. Do not use it.

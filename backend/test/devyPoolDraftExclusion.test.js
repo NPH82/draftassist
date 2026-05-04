@@ -56,6 +56,16 @@ test('does not exclude unrelated names', () => {
   assert.equal(out, false);
 });
 
+test('excludes reversed drafted name order for Ahmad Hardy', () => {
+  const out = shouldExcludeAvailableByDrafted({
+    playerName: 'Ahmad Hardy',
+    playerSleeperId: null,
+    draftedPlayerIds: new Set(),
+    draftedPlayerNames: new Set([normalizeName('Hardy Ahmad')]),
+  });
+  assert.equal(out, true);
+});
+
 test('does not exclude when player name is empty', () => {
   const out = shouldExcludeAvailableByDrafted({
     playerName: '   ',

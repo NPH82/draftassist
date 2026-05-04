@@ -18,7 +18,7 @@ const { ingestCompletedDraftTrends } = require('../services/draftTrendService');
 const { generateBuySellAlerts } = require('../services/alertService');
 const { calcPersonalRankScore } = require('../services/scoringEngine');
 const { ingestDevyDiscrepancyReport } = require('../services/learningEngine');
-const { inferMissReason, sendDiscrepancyEmail } = require('../services/discrepancyReportService');
+const { inferMissReason, sendDiscrepancyEmailWithTimeout } = require('../services/discrepancyReportService');
 const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
@@ -1135,7 +1135,7 @@ router.post('/:leagueId/devy-discrepancy', requireAuth, async (req, res) => {
 
     let emailResult = { sent: false, error: 'email_failed' };
     try {
-      emailResult = await sendDiscrepancyEmail({ report, leagueName: league.name });
+      emailResult = await sendDiscrepancyEmailWithTimeout({ report, leagueName: league.name, timeoutMs: 4000 });
     } catch (emailErr) {
       emailResult = { sent: false, error: emailErr.message || 'email_send_failed' };
       console.warn('[Devy Discrepancy] Email send failed:', emailErr.message);
@@ -1345,6 +1345,25 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       }
     } catch (e) {
       console.warn('[DevyPool] Discrepancy report exclusions unavailable:', e.message);
+    }
+
+    // Fallback exclusion from persisted ownership snapshots for this league.
+    // This prevents known drafted devy players from reappearing when live note
+    // metadata parsing misses a run.
+    try {
+      const snapshotRows = await DevyOwnershipSnapshot.find({ sourceLeagueId: leagueId })
+        .select('devyName devySleeperId normalizedDevyName')
+        .lean();
+
+      for (const row of (snapshotRows || [])) {
+        const snapshotSleeperId = String(row?.devySleeperId || '').trim();
+        if (snapshotSleeperId) draftedPlayerIds.add(snapshotSleeperId);
+
+        const normalizedSnapshotName = normalizeName(row?.devyName || row?.normalizedDevyName || '');
+        if (normalizedSnapshotName) draftedPlayerNames.add(normalizedSnapshotName);
+      }
+    } catch (e) {
+      console.warn('[DevyPool] Snapshot exclusion fallback unavailable:', e.message);
     }
 
     const aliasByPlayerId = new Map(); // playerId -> [alias1, alias2, ...]

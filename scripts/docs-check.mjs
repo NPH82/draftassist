@@ -7,6 +7,14 @@ function run(cmd) {
 function resolveBaseRef() {
   const explicit = process.env.DOCS_CHECK_BASE_REF || process.env.GITHUB_BASE_REF;
   if (explicit) return `origin/${explicit}`;
+
+  try {
+    const upstreamRef = run('git rev-parse --abbrev-ref --symbolic-full-name @{upstream}');
+    if (upstreamRef) return upstreamRef;
+  } catch {
+    // No upstream configured; fall through to local fallback.
+  }
+
   return 'HEAD~1';
 }
 

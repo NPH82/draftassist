@@ -9,6 +9,21 @@ function normalizeName(value) {
     .trim();
 }
 
+function firstLastTokens(value) {
+  const tokens = normalizeName(value)
+    .split(' ')
+    .filter(Boolean);
+  if (tokens.length < 2) return null;
+  return { first: tokens[0], last: tokens[1] };
+}
+
+function isReversedNameMatch(nameA, nameB) {
+  const a = firstLastTokens(nameA);
+  const b = firstLastTokens(nameB);
+  if (!a || !b) return false;
+  return a.first === b.last && a.last === b.first;
+}
+
 function shouldExcludeAvailableByDrafted({
   playerName,
   playerSleeperId,
@@ -28,6 +43,7 @@ function shouldExcludeAvailableByDrafted({
 
   for (const draftedName of names) {
     if (!draftedName || draftedName === normalizedPlayerName) continue;
+    if (isReversedNameMatch(draftedName, normalizedPlayerName)) return true;
     const score = scoreComparableNameMatch(draftedName, playerName);
     if (score >= fuzzyThreshold) return true;
   }

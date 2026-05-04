@@ -76,7 +76,37 @@ async function sendDiscrepancyEmail({ report, leagueName }) {
   return { sent: true };
 }
 
+async function sendDiscrepancyEmailWithTimeout({
+  report,
+  leagueName,
+  timeoutMs = 4000,
+  sendFn = sendDiscrepancyEmail,
+}) {
+  const ms = Number(timeoutMs);
+  const safeTimeout = Number.isFinite(ms) && ms > 0 ? ms : 4000;
+
+  let timeoutHandle = null;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      resolve({ sent: false, error: 'email_timeout' });
+    }, safeTimeout);
+  });
+
+  try {
+    const result = await Promise.race([
+      sendFn({ report, leagueName }),
+      timeoutPromise,
+    ]);
+    return result;
+  } catch (err) {
+    return { sent: false, error: err?.message || 'email_send_failed' };
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
 module.exports = {
   inferMissReason,
   sendDiscrepancyEmail,
+  sendDiscrepancyEmailWithTimeout,
 };

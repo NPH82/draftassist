@@ -67,6 +67,7 @@ A web-based dynasty fantasy football draft assistant that integrates with Sleepe
 - **User-reported devy discrepancy workflow added**: available devy rows now expose a `Report drafted` action that submits a discrepancy report; backend persists report reason/details in `DevyDiscrepancyReport`, applies learning updates to `ManagerProfile`, and sends a maintainer email via SMTP when configured
 - **PR quality gates enforced**: merges to `main` are now expected to require passing security audits, backend/frontend unit tests with coverage thresholds, and a docs-update guard that fails when source code changes without updates to `spec.md` and/or `SETUP.md`
 - **Local pre-push gate expanded**: repo hooks now run security audit plus backend/frontend coverage checks before push to reduce CI churn and catch regressions earlier
+- **Docs-update rule enforced locally**: a new pre-commit hook now blocks commits when app code changes without staged updates to `spec.md` and/or `SETUP.md`; pre-push also runs `docs:check` to block outgoing pushes that violate the docs rule across commit range
 
 ---
 

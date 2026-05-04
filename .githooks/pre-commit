@@ -1,0 +1,38 @@
+#!/usr/bin/env sh
+
+set -eu
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+cd "$ROOT_DIR"
+
+CHANGED_FILES="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+if [ -z "$CHANGED_FILES" ]; then
+  exit 0
+fi
+
+CODE_CHANGED=0
+DOCS_CHANGED=0
+
+for FILE in $CHANGED_FILES; do
+  case "$FILE" in
+    backend/src/*|frontend/src/*|backend/package.json|frontend/package.json)
+      CODE_CHANGED=1
+      ;;
+  esac
+
+  case "$FILE" in
+    spec.md|SETUP.md)
+      DOCS_CHANGED=1
+      ;;
+  esac
+done
+
+if [ "$CODE_CHANGED" -eq 1 ] && [ "$DOCS_CHANGED" -eq 0 ]; then
+  echo "[pre-commit] Source code changed but docs were not updated."
+  echo "[pre-commit] Please stage updates to spec.md and/or SETUP.md in this commit."
+  exit 1
+fi
+
+echo "[pre-commit] Passed: docs update rule"

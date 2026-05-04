@@ -13,4 +13,7 @@ echo "[pre-push] Running backend unit tests with coverage threshold"
 echo "[pre-push] Running frontend unit tests with coverage threshold"
 (cd "$ROOT_DIR/frontend" && npm run test:coverage)
 
-echo "[pre-push] Passed: audit + tests + coverage gates"
+echo "[pre-push] Running docs-update guard"
+(cd "$ROOT_DIR" && npm run docs:check)
+
+echo "[pre-push] Passed: audit + tests + coverage + docs gates"
