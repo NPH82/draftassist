@@ -7,8 +7,17 @@ try {
 }
 
 function inferMissReason(payload = {}) {
+  const allowedReasons = new Set([
+    'live_roster_sync_gap',
+    'draft_pick_ingest_gap',
+    'alias_name_match_miss',
+    'stale_or_wrong_sleeper_id',
+    'duplicate_source_merge',
+    'other',
+  ]);
+
   const provided = String(payload.suspectedMissReason || '').trim();
-  if (provided) return provided;
+  if (provided && allowedReasons.has(provided)) return provided;
 
   if (payload.associatedPlayerId && !payload.playerSleeperId) return 'alias_name_match_miss';
   if (payload.playerSleeperId && payload.playerName) return 'stale_or_wrong_sleeper_id';

@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+
+set -eu
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+echo "[post-commit] Running backend unit tests"
+(cd "$ROOT_DIR/backend" && npm test)
+
+echo "[post-commit] Running frontend unit tests"
+(cd "$ROOT_DIR/frontend" && npm test)
+
+echo "[post-commit] Passed: backend + frontend unit tests"

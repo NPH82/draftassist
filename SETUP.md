@@ -55,6 +55,7 @@ npm run hooks:install
 
 What this does:
 - Configures Git hooks path to `.githooks`
+- Runs backend and frontend unit tests after each commit (`post-commit`)
 - Runs `npm audit --audit-level=high` in both `backend/` and `frontend/` before every push
 - Runs backend and frontend unit tests with coverage thresholds before every push
 - Blocks the push if any audit or test/coverage check fails

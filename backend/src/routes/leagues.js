@@ -1116,19 +1116,30 @@ router.post('/:leagueId/devy-discrepancy', requireAuth, async (req, res) => {
       suspectedMissReason: normalizedReason,
     });
 
-    const learning = await ingestDevyDiscrepancyReport({
-      sleeperId,
-      username,
-      reportId: report._id,
-      leagueId,
-      playerName: report.playerName,
-      playerSleeperId: report.playerSleeperId,
-      sourceTab: report.sourceTab,
-      suspectedMissReason: report.suspectedMissReason,
-      note: report.note,
-    });
+    let learning = { learned: false, reason: 'learning_failed' };
+    try {
+      learning = await ingestDevyDiscrepancyReport({
+        sleeperId,
+        username,
+        reportId: report._id,
+        leagueId,
+        playerName: report.playerName,
+        playerSleeperId: report.playerSleeperId,
+        sourceTab: report.sourceTab,
+        suspectedMissReason: report.suspectedMissReason,
+        note: report.note,
+      });
+    } catch (learningErr) {
+      console.warn('[Devy Discrepancy] Learning update failed:', learningErr.message);
+    }
 
-    const emailResult = await sendDiscrepancyEmail({ report, leagueName: league.name });
+    let emailResult = { sent: false, error: 'email_failed' };
+    try {
+      emailResult = await sendDiscrepancyEmail({ report, leagueName: league.name });
+    } catch (emailErr) {
+      emailResult = { sent: false, error: emailErr.message || 'email_send_failed' };
+      console.warn('[Devy Discrepancy] Email send failed:', emailErr.message);
+    }
 
     await DevyDiscrepancyReport.updateOne(
       { _id: report._id },
@@ -1314,6 +1325,26 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
       } catch (e) {
         console.warn('[DevyPool] Draft picks unavailable:', e.message);
       }
+    }
+
+    // Also exclude players manually reported as already drafted in this league.
+    try {
+      const openReports = await DevyDiscrepancyReport.find({
+        leagueId,
+        status: 'open',
+      })
+        .select('playerName playerSleeperId')
+        .lean();
+
+      for (const report of (openReports || [])) {
+        const reportId = String(report?.playerSleeperId || '').trim();
+        if (reportId) draftedPlayerIds.add(reportId);
+
+        const reportName = normalizeName(report?.playerName || '');
+        if (reportName) draftedPlayerNames.add(reportName);
+      }
+    } catch (e) {
+      console.warn('[DevyPool] Discrepancy report exclusions unavailable:', e.message);
     }
 
     const aliasByPlayerId = new Map(); // playerId -> [alias1, alias2, ...]

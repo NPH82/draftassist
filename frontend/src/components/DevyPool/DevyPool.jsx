@@ -26,7 +26,6 @@ function DevyPlayerRow({
   player,
   showOwner,
   onReportDrafted,
-  onReportUiIssue,
   reporting,
   selectable,
   selected,
@@ -139,24 +138,6 @@ function DevyPlayerRow({
               title="Report this player as already drafted"
             >
               {reporting ? 'Sending...' : 'Report drafted'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onReportUiIssue?.(player)}
-              disabled={!!reporting}
-              style={{
-                fontSize: '0.62rem',
-                border: 'none',
-                borderRadius: 4,
-                padding: '0.18rem 0.38rem',
-                cursor: reporting ? 'default' : 'pointer',
-                background: reporting ? 'var(--bg-primary)' : 'rgba(59,130,246,0.12)',
-                color: reporting ? 'var(--text-muted)' : '#60a5fa',
-                fontWeight: 600,
-              }}
-              title="Report this as a UI/filtering issue"
-            >
-              {reporting ? 'Sending...' : 'Report UI issue'}
             </button>
           </div>
         </div>
@@ -367,40 +348,6 @@ export default function DevyPool({ leagueId }) {
     }
   }
 
-  async function handleReportUiIssue(player) {
-    const note = window.prompt(
-      `Describe the UI/filter issue for ${player.name}:`,
-      `UI issue: ${player.name} appears unexpectedly in ${posFilter} filter.`
-    );
-    const key = reportKeyForPlayer(player);
-    setReportingKey(key);
-    setReportStatus(null);
-    try {
-      const res = await reportDevyDiscrepancy(leagueId, {
-        playerName: player.name,
-        playerSleeperId: player.sleeperId || null,
-        associatedPlayerId: player.associatedPlayerId || null,
-        associatedPlayerName: player.associatedPlayerName || null,
-        sourceTab: 'available',
-        suspectedMissReason: 'other',
-        note: note ? String(note).trim() : `UI issue reported for ${player.name}`,
-      });
-      setReportStatus({
-        type: 'ok',
-        message: res?.emailSent
-          ? `${player.name} UI issue reported. Email sent and learning updated.`
-          : `${player.name} UI issue saved and learning updated (email: ${res?.emailStatus || 'not sent'}).`,
-      });
-    } catch (err) {
-      setReportStatus({
-        type: 'err',
-        message: err?.response?.data?.error || `Failed to report UI issue for ${player.name}`,
-      });
-    } finally {
-      setReportingKey(null);
-    }
-  }
-
   async function handleBulkReportDrafted() {
     const selected = Object.values(selectedPlayers);
     if (!selected.length) {
@@ -550,7 +497,6 @@ export default function DevyPool({ leagueId }) {
                 player={p}
                 showOwner={false}
                 onReportDrafted={handleReportDrafted}
-                onReportUiIssue={handleReportUiIssue}
                 reporting={reportingKey === reportKeyForPlayer(p)}
                 selectable={selectionMode}
                 selected={isSelected(p)}
