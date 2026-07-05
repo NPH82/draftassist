@@ -4,16 +4,17 @@
  */
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdminAllowlist } = require('../middleware/auth');
 const { refreshDailyRankings, refreshDepthCharts, loadPlayerData, refreshDevyRankings } = require('../scrapers/index');
 const { learnFromUserLeagues, enrichProfilesWithDraftClass } = require('../services/learningEngine');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const sleeperService = require('../services/sleeperService');
 const { importSleeperPlayers, syncSleeperIds: runSyncSleeperIds, importDevyPlayers } = require('../services/sleeperSync');
+const adminGate = [requireAuth, requireAdminAllowlist];
 
 // POST /api/admin/refresh/rankings -- trigger daily rankings scrape now
-router.post('/refresh/rankings', requireAuth, async (req, res) => {
+router.post('/refresh/rankings', adminGate, async (req, res) => {
   try {
     console.log('[Admin] Manual rankings refresh triggered');
     // Run async, respond immediately so the HTTP request doesn't time out
@@ -27,7 +28,7 @@ router.post('/refresh/rankings', requireAuth, async (req, res) => {
 });
 
 // POST /api/admin/refresh/depth-charts -- trigger weekly depth chart scrape now
-router.post('/refresh/depth-charts', requireAuth, async (req, res) => {
+router.post('/refresh/depth-charts', adminGate, async (req, res) => {
   try {
     console.log('[Admin] Manual depth chart refresh triggered');
     refreshDepthCharts()
@@ -40,7 +41,7 @@ router.post('/refresh/depth-charts', requireAuth, async (req, res) => {
 });
 
 // POST /api/admin/load-player-data -- one-time deep load: PFR combine stats, ESPN draft results, RotoWire college injuries
-router.post('/load-player-data', requireAuth, async (req, res) => {
+router.post('/load-player-data', adminGate, async (req, res) => {
   try {
     console.log('[Admin] Manual player data load triggered');
     loadPlayerData()
@@ -53,7 +54,7 @@ router.post('/load-player-data', requireAuth, async (req, res) => {
 });
 
 // GET /api/admin/data-status -- shows last updated timestamps per source
-router.get('/data-status', requireAuth, async (req, res) => {
+router.get('/data-status', adminGate, async (req, res) => {
   try {
     const RankingSnapshot = require('../models/RankingSnapshot');
     const [latestFp, latestKtc, latestUdg, playerCount, playersWithFp, playersWithKtc] = await Promise.all([
@@ -79,7 +80,7 @@ router.get('/data-status', requireAuth, async (req, res) => {
 
 // POST /api/admin/learn -- scan all user leagues + leaguemate leagues for completed drafts
 // Skips any draft already processed. Runs async; returns immediately with job status.
-router.post('/learn', requireAuth, async (req, res) => {
+router.post('/learn', adminGate, async (req, res) => {
   try {
     const userId = req.user.sleeperId;
     const leagues = await sleeperService.getUserLeagues(userId).catch(() => []);
@@ -106,7 +107,7 @@ router.post('/learn', requireAuth, async (req, res) => {
 
 // GET /api/admin/manager-profiles -- scouting summaries for all leaguemates
 // Optional query param ?leagueId=XXX narrows to a single league and adds win-window data.
-router.get('/manager-profiles', requireAuth, async (req, res) => {
+router.get('/manager-profiles', adminGate, async (req, res) => {
   try {
     const userId = req.user.sleeperId;
     const { leagueId } = req.query;
@@ -235,7 +236,7 @@ router.get('/manager-profiles', requireAuth, async (req, res) => {
 });
 
 // GET /api/admin/manager-search?q=TEXT -- search any manager by username (not limited to leaguemates)
-router.get('/manager-search', requireAuth, async (req, res) => {
+router.get('/manager-search', adminGate, async (req, res) => {
   try {
     const q = (req.query.q || '').trim();
     if (q.length < 2) return res.json({ profiles: [] });
@@ -277,7 +278,7 @@ router.get('/manager-search', requireAuth, async (req, res) => {
 });
 
 // POST /api/admin/seed-rookies/:year -- seed a draft class if not already in DB
-router.post('/seed-rookies/:year', requireAuth, async (req, res) => {
+router.post('/seed-rookies/:year', adminGate, async (req, res) => {
   const year = parseInt(req.params.year, 10);
   if (isNaN(year) || year < 2020 || year > 2030) {
     return res.status(400).json({ error: 'Invalid year' });
@@ -306,7 +307,7 @@ router.post('/seed-rookies/:year', requireAuth, async (req, res) => {
 });
 
 // POST /api/admin/sync-sleeper-ids -- back-fill sleeperId on players missing one
-router.post('/sync-sleeper-ids', requireAuth, async (req, res) => {
+router.post('/sync-sleeper-ids', adminGate, async (req, res) => {
   try {
     const result = await runSyncSleeperIds();
     res.json({
@@ -320,7 +321,7 @@ router.post('/sync-sleeper-ids', requireAuth, async (req, res) => {
 
 // POST /api/admin/import-sleeper-players
 // Upserts all skill-position players from Sleeper's /players/nfl into our DB.
-router.post('/import-sleeper-players', requireAuth, async (req, res) => {
+router.post('/import-sleeper-players', adminGate, async (req, res) => {
   try {
     const result = await importSleeperPlayers();
     res.json({
@@ -335,7 +336,7 @@ router.post('/import-sleeper-players', requireAuth, async (req, res) => {
 // POST /api/admin/import-devy-players
 // Seeds college/devy prospects from Sleeper's /players/nfl (years_exp === -1) into our DB.
 // Run once to seed, then re-run after each NFL draft to remove graduated prospects.
-router.post('/import-devy-players', requireAuth, async (req, res) => {
+router.post('/import-devy-players', adminGate, async (req, res) => {
   try {
     const result = await importDevyPlayers();
     res.json({
@@ -349,7 +350,7 @@ router.post('/import-devy-players', requireAuth, async (req, res) => {
 
 // GET /api/admin/devy-players
 // Returns all isDevy=true records — useful for auditing what was seeded.
-router.get('/devy-players', requireAuth, async (req, res) => {
+router.get('/devy-players', adminGate, async (req, res) => {
   try {
     const players = await Player.find({ isDevy: true })
       .select('name position college devyClass devyKtcValue devyKtcRank sheetRank sheetRating sleeperId dataSource bigBoardRank')
@@ -365,7 +366,7 @@ router.get('/devy-players', requireAuth, async (req, res) => {
 // Compares every isDevy=true DB record against the live Sleeper player map and strips isDevy
 // from any player Sleeper no longer considers a devy prospect (retired, active NFL vet, etc.).
 // Run this once to repair a polluted DB, then re-run after each NFL draft to clean up graduates.
-router.post('/fix-devy-flags', requireAuth, async (req, res) => {
+router.post('/fix-devy-flags', adminGate, async (req, res) => {
   try {
     const { getAllPlayers } = require('../services/sleeperService');
     const sleeperMap = await getAllPlayers('nfl');
@@ -437,7 +438,7 @@ router.post('/fix-devy-flags', requireAuth, async (req, res) => {
 // Fetches the curated Google Sheet, KTC devy values, NFLMDB big board, and FP devy rankings.
 // The sheet is the source of truth for ranking order; KTC remains a comparison signal.
 // Safe to run repeatedly — fires async so the response returns immediately.
-router.post('/refresh/devy-rankings', requireAuth, async (req, res) => {
+router.post('/refresh/devy-rankings', adminGate, async (req, res) => {
   try {
     console.log('[Admin] Devy rankings refresh triggered');
     refreshDevyRankings()
@@ -452,7 +453,7 @@ router.post('/refresh/devy-rankings', requireAuth, async (req, res) => {
 // POST /api/admin/refresh/devy-rankings/sync
 // Same as above but waits for completion and returns full results.
 // Useful for one-time seeding or verifying the import.
-router.post('/refresh/devy-rankings/sync', requireAuth, async (req, res) => {
+router.post('/refresh/devy-rankings/sync', adminGate, async (req, res) => {
   try {
     console.log('[Admin] Devy rankings sync refresh triggered');
     const result = await refreshDevyRankings();

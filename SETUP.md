@@ -28,7 +28,12 @@ MONGODB_URI=mongodb+srv://<user>:<pass>@cluster0.mongodb.net/draftassistant?retr
 PORT=4000
 FRONTEND_URL=http://localhost:5173
 NODE_ENV=development
+ADMIN_SLEEPER_IDS=comma,separated,sleeper_user_ids
 ```
+
+`ADMIN_SLEEPER_IDS` controls access to `/api/admin/*` endpoints only.
+- Leave empty/unset: all admin endpoints return `403` (fail-safe), normal user routes still work.
+- Set to one or more Sleeper `user_id` values: only those users can call `/api/admin/*`.
 
 ### 3. Run dev servers (two terminals)
 ```bash
@@ -148,6 +153,7 @@ Results are upserted onto all Player documents with `nflDraftYear >= 2025`. Safe
    - `MONGODB_URI` (from Atlas)
    - `FRONTEND_URL` (your Vercel URL, e.g. `https://draftassist.vercel.app`)
    - `NODE_ENV=production`
+   - `ADMIN_SLEEPER_IDS` (comma-separated Sleeper `user_id` values allowed to call `/api/admin/*`)
    - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` — required for devy discrepancy report emails (Gmail: host=`smtp.gmail.com`, port=`587`, secure=`false`, user/from=Gmail address, pass=16-char App Password)
    - `DISCREPANCY_REPORT_TO_EMAIL` — address that receives devy discrepancy report notifications
    - Optional timeout tuning for slower hosts:
