@@ -27,6 +27,7 @@ const League = require('../models/League');
 const Player = require('../models/Player');
 const ManagerProfile = require('../models/ManagerProfile');
 const DevyOwnershipSnapshot = require('../models/DevyOwnershipSnapshot');
+const DevyDraftEvent = require('../models/DevyDraftEvent');
 const DevyDiscrepancyReport = require('../models/DevyDiscrepancyReport');
 const { extractDevyCandidatesFromAlias } = require('../utils/devyNoteParser');
 const { normalizeComparableName, scoreComparableNameMatch } = require('../utils/devyNameMatcher');
@@ -70,6 +71,19 @@ function buildDevyRosterDedupKey({ ownerId, associatedPlayerId, devyPlayerId, sl
   const nameKey = normalizeName(name);
   const identity = devyPlayerKey || sleeperKey || nameKey;
   return `${ownerKey}:${associatedKey}:${identity}`;
+}
+
+function buildSnapshotScopeKey({ ownerId, associatedPlayerId, normalizedDevyName }) {
+  const ownerKey = String(ownerId || '').trim();
+  const associatedKey = String(associatedPlayerId || '').trim();
+  const nameKey = String(normalizedDevyName || '').trim();
+  return `${ownerKey}:${associatedKey}:${nameKey}`;
+}
+
+function buildSnapshotIdentityKey({ associatedPlayerId, normalizedDevyName }) {
+  const associatedKey = String(associatedPlayerId || '').trim();
+  const nameKey = String(normalizedDevyName || '').trim();
+  return `${associatedKey}:${nameKey}`;
 }
 
 function isSleeperDevyPlayer(sp = {}) {
@@ -2110,6 +2124,206 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
 
     if (snapshotOps.length > 0) {
       try {
+        const previousSnapshots = await DevyOwnershipSnapshot.find({ sourceLeagueId: leagueId })
+          .select('sourceLeagueId managerSleeperId managerUsername managerTeamName associatedPlayerId associatedPlayerName normalizedDevyName devyName devySleeperId devyPlayerId position college devyClass sourceType onTaxi')
+          .lean();
+
+        const prevByScopeKey = new Map();
+        const prevByIdentityKey = new Map();
+        for (const row of (previousSnapshots || [])) {
+          const normalizedDevyName = String(row?.normalizedDevyName || '').trim();
+          if (!normalizedDevyName || !row?.managerSleeperId) continue;
+
+          const scopeKey = buildSnapshotScopeKey({
+            ownerId: row.managerSleeperId,
+            associatedPlayerId: row.associatedPlayerId || null,
+            normalizedDevyName,
+          });
+          prevByScopeKey.set(scopeKey, row);
+
+          const identityKey = buildSnapshotIdentityKey({
+            associatedPlayerId: row.associatedPlayerId || null,
+            normalizedDevyName,
+          });
+          if (!prevByIdentityKey.has(identityKey)) prevByIdentityKey.set(identityKey, []);
+          prevByIdentityKey.get(identityKey).push(row);
+        }
+
+        const nowRows = [];
+        const nowByScopeKey = new Map();
+        const nowByIdentityKey = new Map();
+        for (const row of snapshotRows) {
+          const normalizedDevyName = normalizeName(row.name);
+          if (!normalizedDevyName || !row?.ownerId) continue;
+
+          const sourceType = row.fromPlayerNote ? 'note' : 'roster';
+          const associatedPlayerId = row.associatedPlayerId || (sourceType === 'roster' ? row.sleeperId : null);
+          const associatedPlayerName = row.associatedPlayerName || null;
+          const normalizedAssociatedPlayerId = associatedPlayerId ? String(associatedPlayerId).trim() : null;
+
+          const normalizedRow = {
+            sourceLeagueId: leagueId,
+            managerSleeperId: row.ownerId,
+            managerUsername: row.ownerUsername || null,
+            managerTeamName: row.ownerTeamName || null,
+            associatedPlayerId: normalizedAssociatedPlayerId,
+            associatedPlayerName,
+            normalizedDevyName,
+            devyName: row.name,
+            devySleeperId: row.sleeperId || null,
+            devyPlayerId: row.devyPlayerId || null,
+            position: row.position || null,
+            college: row.college || null,
+            devyClass: row.devyClass || null,
+            sourceType,
+            onTaxi: !!row.onTaxi,
+          };
+
+          nowRows.push(normalizedRow);
+
+          const scopeKey = buildSnapshotScopeKey({
+            ownerId: normalizedRow.managerSleeperId,
+            associatedPlayerId: normalizedRow.associatedPlayerId,
+            normalizedDevyName,
+          });
+          nowByScopeKey.set(scopeKey, normalizedRow);
+
+          const identityKey = buildSnapshotIdentityKey({
+            associatedPlayerId: normalizedRow.associatedPlayerId,
+            normalizedDevyName,
+          });
+          if (!nowByIdentityKey.has(identityKey)) nowByIdentityKey.set(identityKey, []);
+          nowByIdentityKey.get(identityKey).push(normalizedRow);
+        }
+
+        const eventDocs = [];
+        const eventAt = now;
+
+        for (const row of nowRows) {
+          const scopeKey = buildSnapshotScopeKey({
+            ownerId: row.managerSleeperId,
+            associatedPlayerId: row.associatedPlayerId,
+            normalizedDevyName: row.normalizedDevyName,
+          });
+          if (!prevByScopeKey.has(scopeKey)) {
+            eventDocs.push({
+              sourceLeagueId: leagueId,
+              eventType: 'drafted',
+              eventAt,
+              managerSleeperId: row.managerSleeperId,
+              managerUsername: row.managerUsername,
+              managerTeamName: row.managerTeamName,
+              associatedPlayerId: row.associatedPlayerId,
+              associatedPlayerName: row.associatedPlayerName,
+              normalizedDevyName: row.normalizedDevyName,
+              devyName: row.devyName,
+              devySleeperId: row.devySleeperId,
+              devyPlayerId: row.devyPlayerId,
+              position: row.position,
+              college: row.college,
+              devyClass: row.devyClass,
+              sourceType: row.sourceType,
+              onTaxi: row.onTaxi,
+            });
+          }
+        }
+
+        for (const [scopeKey, previous] of prevByScopeKey.entries()) {
+          if (nowByScopeKey.has(scopeKey)) continue;
+          eventDocs.push({
+            sourceLeagueId: leagueId,
+            eventType: 'removed',
+            eventAt,
+            managerSleeperId: previous.managerSleeperId,
+            managerUsername: previous.managerUsername || null,
+            managerTeamName: previous.managerTeamName || null,
+            associatedPlayerId: previous.associatedPlayerId || null,
+            associatedPlayerName: previous.associatedPlayerName || null,
+            normalizedDevyName: previous.normalizedDevyName,
+            devyName: previous.devyName,
+            devySleeperId: previous.devySleeperId || null,
+            devyPlayerId: previous.devyPlayerId || null,
+            position: previous.position || null,
+            college: previous.college || null,
+            devyClass: previous.devyClass || null,
+            sourceType: previous.sourceType || 'roster',
+            onTaxi: !!previous.onTaxi,
+          });
+        }
+
+        for (const [identityKey, nowSet] of nowByIdentityKey.entries()) {
+          const prevSet = prevByIdentityKey.get(identityKey) || [];
+          if (!prevSet.length || !nowSet.length) continue;
+
+          const prevOwners = new Set(prevSet.map((row) => String(row.managerSleeperId || '').trim()).filter(Boolean));
+          const nowOwners = new Set(nowSet.map((row) => String(row.managerSleeperId || '').trim()).filter(Boolean));
+          if (prevOwners.size !== 1 || nowOwners.size !== 1) continue;
+
+          const prevOwner = [...prevOwners][0];
+          const nowOwner = [...nowOwners][0];
+          if (!prevOwner || !nowOwner || prevOwner === nowOwner) continue;
+
+          const nextRow = nowSet[0];
+          eventDocs.push({
+            sourceLeagueId: leagueId,
+            eventType: 'owner_changed',
+            eventAt,
+            managerSleeperId: nextRow.managerSleeperId,
+            managerUsername: nextRow.managerUsername || null,
+            managerTeamName: nextRow.managerTeamName || null,
+            previousManagerSleeperId: prevOwner,
+            previousManagerUsername: prevSet[0]?.managerUsername || null,
+            previousManagerTeamName: prevSet[0]?.managerTeamName || null,
+            associatedPlayerId: nextRow.associatedPlayerId || null,
+            associatedPlayerName: nextRow.associatedPlayerName || null,
+            normalizedDevyName: nextRow.normalizedDevyName,
+            devyName: nextRow.devyName,
+            devySleeperId: nextRow.devySleeperId || null,
+            devyPlayerId: nextRow.devyPlayerId || null,
+            position: nextRow.position || null,
+            college: nextRow.college || null,
+            devyClass: nextRow.devyClass || null,
+            sourceType: nextRow.sourceType || 'roster',
+            onTaxi: !!nextRow.onTaxi,
+          });
+        }
+
+        if (eventDocs.length === 0 && nowRows.length > 0) {
+          const existingEventCount = await DevyDraftEvent.countDocuments({ sourceLeagueId: leagueId });
+          if (existingEventCount === 0) {
+            for (const row of nowRows) {
+              eventDocs.push({
+                sourceLeagueId: leagueId,
+                eventType: 'drafted',
+                eventAt,
+                managerSleeperId: row.managerSleeperId,
+                managerUsername: row.managerUsername,
+                managerTeamName: row.managerTeamName,
+                associatedPlayerId: row.associatedPlayerId,
+                associatedPlayerName: row.associatedPlayerName,
+                normalizedDevyName: row.normalizedDevyName,
+                devyName: row.devyName,
+                devySleeperId: row.devySleeperId,
+                devyPlayerId: row.devyPlayerId,
+                position: row.position,
+                college: row.college,
+                devyClass: row.devyClass,
+                sourceType: row.sourceType,
+                onTaxi: row.onTaxi,
+                isBootstrap: true,
+              });
+            }
+          }
+        }
+
+        if (eventDocs.length > 0) {
+          await DevyDraftEvent.insertMany(eventDocs, { ordered: false });
+        }
+      } catch (e) {
+        console.warn('[DevyPool] Devy draft event ledger write unavailable:', e.message);
+      }
+
+      try {
         await DevyOwnershipSnapshot.bulkWrite(snapshotOps, { ordered: false });
       } catch (e) {
         console.warn('[DevyPool] Snapshot cache write unavailable:', e.message);
@@ -2138,6 +2352,44 @@ router.get('/:leagueId/devy-pool', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('[DevyPool]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/leagues/:leagueId/devy-draft-events
+// Returns immutable devy ownership change events observed for this league.
+router.get('/:leagueId/devy-draft-events', requireAuth, async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const limitRaw = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 1000)) : 300;
+
+    const league = await League.findOne({ sleeperId: leagueId }).lean();
+    if (!league) return res.status(404).json({ error: 'League not found' });
+
+    const userIsInLeague = (league.rosters || []).some((roster) => roster.ownerId === req.user.sleeperId);
+    if (!userIsInLeague) return res.status(403).json({ error: 'You do not have access to this league' });
+
+    const events = await DevyDraftEvent.find({ sourceLeagueId: leagueId })
+      .sort({ eventAt: -1, createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    const countsByType = events.reduce((acc, event) => {
+      const key = event?.eventType || 'unknown';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    res.json({
+      leagueId,
+      leagueName: league.name,
+      count: events.length,
+      countsByType,
+      events,
+    });
+  } catch (err) {
+    console.error('[DevyDraftEvents]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

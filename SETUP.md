@@ -249,4 +249,17 @@ If position need tags feel stale, refresh league cache by reloading the Dashboar
 
 The backend also persists discovered drafted devy mappings into `DevyOwnershipSnapshot` (manager + team + league scoped). This cache is reused by future devy-pool calls to speed up cross-league note resolution for all users.
 
+The backend now also writes an immutable league-scoped event ledger (`DevyDraftEvent`) from each devy-pool refresh diff. Use this endpoint to inspect historical ownership events instead of only current roster snapshots:
+
+```bash
+GET /api/leagues/:leagueId/devy-draft-events?limit=300
+```
+
+Event types currently emitted:
+- `drafted`
+- `removed`
+- `owner_changed`
+
+On first run for a league, the ledger bootstraps a baseline with `isBootstrap=true` events so historical tracking can start immediately from current known ownership.
+
 No per-league spreadsheet is required. Devy mapping is inferred directly from Sleeper league metadata notes/nicknames across all managers in that league, with extra weighting for placeholder roster slots (K/DEF/inactive or retired players) where commissioners commonly store devy notes.
